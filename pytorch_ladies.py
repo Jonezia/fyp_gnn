@@ -79,7 +79,6 @@ def package_mxl(mxl, device):
     return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
 
 
-
 if args.cuda != -1:
     if torch.cuda.is_available():
         device = torch.device("cuda:" + str(args.cuda))
@@ -91,11 +90,6 @@ else:
     
 print(args.dataset, args.sampler)
 edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes, multiclass = load_data(args.dataset)
-print(f"Train nodes: {len(train_nodes)}")
-print(f"Val nodes: {len(valid_nodes)}")
-print(f"Test nodes: {len(test_nodes)}")
-print(f"Num features: {feat_data.shape[1]}")
-print(f"Num classes: {num_classes}")
 
 adj_matrix = get_adj(edges, feat_data.shape[0])
 
@@ -134,12 +128,6 @@ elif args.sampler == 'full':
     sampler = default_sampler
 elif args.sampler == 'receptive_field':
     sampler = default_sampler_restricted
-elif args.sampler == 'graphsage':
-    sampler = graphsage_sampler
-elif args.sampler == 'connection':
-    sampler = connection_sampler
-elif args.sampler == 'ladies_no_backtrack':
-    sampler = ladies_no_backtracking_sampler
 else:
     raise ValueError("Unacceptable sample method")
 
@@ -284,10 +272,6 @@ for oiter in range(args.oiter):
     best_model = torch.load('./save/best_model.pt')
     best_model.eval()
     test_f1s = []
-
-    # for name, param in best_model.named_parameters():
-    #     if param.requires_grad:
-    #         print(f"param {name}: {param.data}")
     
     '''
     If using batch sampling for inference:

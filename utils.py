@@ -20,12 +20,62 @@ import pandas as pd
 from sklearn.metrics import f1_score, confusion_matrix
 from collections import defaultdict
 import matplotlib.pyplot as plt
-import networkx as nx
 import time
 import sys
 import os
 
+from torch_geometric.datasets import Planetoid
 
+def load_data_pyg(dataset_str, normalize=True):
+    print(f"Loading {dataset_str} Dataset...")
+
+    data = None
+    if dataset_str == "cora":
+        data = Planetoid(root='./data/Cora', name='Cora')
+    elif dataset_str == "citeseer":
+        data = Planetoid(root='./data/Citeseer', name='Citeseer')
+    elif dataset_str == "pubmed":
+        data = Planetoid(root='./data/Pubmed', name='Pubmed')
+    else:
+        raise ValueError("Not valid dataset")
+
+    # Read Labels
+    feat_data = data.x.numpy()
+    # Read Features
+    labels = data.y.numpy()
+    # Read Edges
+    edges = data.edge_index
+    edges = edges.numpy().T
+
+    if len(labels.shape) > 1:
+        multilabel = True
+        num_classes = len(labels[0])
+    else:
+        multilabel = False
+        num_classes = np.max(labels) + 1
+
+    train_nodes = np.nonzero(data.train_mask)
+    val_nodes = np.nonzero(data.val_mask)
+    test_nodes = np.nonzero(data.test_mask)
+
+    print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nodes, test_nodes, multilabel)
+            
+    return edges, labels, feat_data, num_classes, train_nodes, val_nodes, test_nodes, multilabel
+
+def print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nodes, test_nodes, multilabel):
+    print("=============== Dataset Properties ===============")
+    print(f"Total Nodes: {feat_data.shape[0]}")
+    print(f"Total Edges: {edges.shape[0]}")
+    print(f"Number of Features: {feat_data.shape[1]}")
+    print(f"Number of Classes: {num_classes}")
+    if not multilabel:
+        print("Task Type: Multi-class Classification")
+    else:
+        print("Task Type: Multi-label Classification")
+    print(f"Training Nodes: {sum(train_nodes)}")
+    print(f"Validation Nodes: {sum(val_nodes)}")
+    print(f"Testing Nodes: {sum(test_nodes)}")
+    print()
 
 def parse_index_file(filename):
     """Parse index file."""
@@ -137,7 +187,7 @@ def load_data(dataset_str, normalize=True):
         else:
             num_labels = np.max(labels) + 1
         
-        return np.array(edges), np.array(labels), np.array(features),num_labels,\
+        return np.array(edges), np.array(labels), np.array(features), num_labels,\
                 np.array(idx_train), np.array(idx_val), np.array(idx_test), multiclass
     
     names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
@@ -182,7 +232,7 @@ def load_data(dataset_str, normalize=True):
             edges += [[s, t]]
         degrees[s] = len(graph[s])
     labels = np.argmax(labels, axis=1)
-    return np.array(edges), labels, features, np.max(labels)+1,  idx_train, idx_val, idx_test
+    return np.array(edges), labels, features, np.max(labels)+1,  idx_train, idx_val, idx_test, False
 
 def sym_normalize(mx):
     """Sym-normalize sparse matrix"""
@@ -208,22 +258,6 @@ def row_normalize(mx):
 
     mx = r_mat_inv.dot(mx)
     return mx
-
-
-def generate_random_graph(n, e, prob = 0.1):
-    idx = np.random.randint(2)
-    g = nx.powerlaw_cluster_graph(n, e, prob) 
-    adj_lists = defaultdict(set)
-    num_feats = 8
-    degrees = np.zeros(len(g), dtype=np.int64)
-    edges = []
-    for s in g:
-        for t in g[s]:
-            edges += [[s, t]]
-            degrees[s] += 1
-            degrees[t] += 1
-    edges = np.array(edges)
-    return degrees, edges, g, None 
 
 def get_sparse(edges, num_nodes):
     adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])),
@@ -297,115 +331,6 @@ def metrics(logits, y):
         spec = (tn)/(tn + fp)
         
     return acc, micro_f1, sens, spec
-
-def load_graphsage_data(dataset_path, dataset_str, normalize=True):
-  """Load GraphSAGE data."""
-  start_time = time.time()
-
-  graph_json = json.load(
-      open('{}/{}/{}-G.json'.format(dataset_path, dataset_str,
-                                          dataset_str)))
-  graph_nx = json_graph.node_link_graph(graph_json)
-
-  id_map = json.load(
-      open('{}/{}/{}-id_map.json'.format(dataset_path, dataset_str,
-                                               dataset_str)))
-  is_digit = list(id_map.keys())[0].isdigit()
-  id_map = {(int(k) if is_digit else k): int(v) for k, v in id_map.items()}
-  class_map = json.load(
-      open('{}/{}/{}-class_map.json'.format(dataset_path, dataset_str,
-                                                  dataset_str)))
-
-  is_instance = isinstance(list(class_map.values())[0], list)
-  class_map = {(int(k) if is_digit else k): (v if is_instance else int(v))
-               for k, v in class_map.items()}
-  
-  print(f"nodes: {len(graph_nx.nodes())}")
-  print(f"edges: {len(graph_nx.edges())}")
-
-  broken_count = 0
-  to_remove = []
-  for node in graph_nx.nodes():
-    if node not in id_map:
-      to_remove.append(node)
-      broken_count += 1
-  for node in to_remove:
-    graph_nx.remove_node(node)
-  print(f'Removed {broken_count} nodes that lacked proper annotations due to networkx versioning issues')
-
-  feats = np.load(
-      open(
-          '{}/{}/{}-feats.npy'.format(dataset_path, dataset_str, dataset_str),
-          'rb')).astype(np.float32)
-
-  print(f'Loaded data ({time.time() - start_time} seconds).. now preprocessing..')
-  start_time = time.time()
-
-  print(f"nodes: {len(graph_nx.nodes())}")
-  print(f"edges: {len(graph_nx.edges())}")
-
-  edges = []
-  for edge in graph_nx.edges():
-    if edge[0] in id_map and edge[1] in id_map:
-      edges.append((id_map[edge[0]], id_map[edge[1]]))
-  num_data = len(id_map)
-
-  val_data = np.array(
-      [id_map[n] for n in graph_nx.nodes() if graph_nx.nodes[n]['val']],
-      dtype=np.int32)
-  test_data = np.array(
-      [id_map[n] for n in graph_nx.nodes() if graph_nx.nodes[n]['test']],
-      dtype=np.int32)
-  is_train = np.ones((num_data), dtype=bool)
-  is_train[val_data] = False
-  is_train[test_data] = False
-  train_data = np.array([n for n in range(num_data) if is_train[n]],
-                        dtype=np.int32)
-
-  train_edges = [
-      (e[0], e[1]) for e in edges if is_train[e[0]] and is_train[e[1]]
-  ]
-  edges = np.array(edges, dtype=np.int32)
-  train_edges = np.array(train_edges, dtype=np.int32)
-
-  # Process labels
-  if isinstance(list(class_map.values())[0], list):
-    num_classes = len(list(class_map.values())[0])
-    labels = np.zeros((num_data, num_classes), dtype=np.float32)
-    for k in class_map.keys():
-      labels[id_map[k], :] = np.array(class_map[k])
-  else:
-    num_classes = len(set(class_map.values()))
-    labels = np.zeros((num_data, num_classes), dtype=np.float32)
-    for k in class_map.keys():
-      labels[id_map[k], class_map[k]] = 1
-
-  if normalize:
-    train_ids = np.array([
-        id_map[n]
-        for n in graph_nx.nodes()
-        if not graph_nx.nodes[n]['val'] and not graph_nx.nodes[n]['test']
-    ])
-    train_feats = feats[train_ids]
-    scaler = StandardScaler()
-    scaler.fit(train_feats)
-    feats = scaler.transform(feats)
-
-  def _construct_adj(edges):
-    adj = sp.csr_matrix((np.ones(
-        (edges.shape[0]), dtype=np.float32), (edges[:, 0], edges[:, 1])),
-                        shape=(num_data, num_data))
-    adj += adj.transpose()
-    return adj
-
-  train_adj = _construct_adj(train_edges)
-  full_adj = _construct_adj(edges)
-
-  train_feats = feats[train_data]
-  test_feats = feats
-
-  print(f'Data loaded, {time.time() - start_time} seconds.')
-  return num_data, train_adj, full_adj, feats, train_feats, test_feats, labels, train_data, val_data, test_data
 
 from scipy.sparse.csgraph import shortest_path
 # uses Dijkstra's algorithm, O[N(N*k + N*log(N))],
