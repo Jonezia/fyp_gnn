@@ -31,7 +31,7 @@ def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dep
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes, batch_nodes
+    return adjs, previous_nodes
 
 def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
@@ -64,11 +64,11 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes, batch_nodes
+    return adjs, previous_nodes
 
 def default_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     mx = sparse_mx_to_torch_sparse_tensor(lap_matrix)
-    return [mx for i in range(depth)], np.arange(num_nodes), batch_nodes
+    return [mx], np.arange(num_nodes)
 
 def default_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     np.random.seed(seed)
@@ -88,4 +88,4 @@ def default_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes, batch_nodes
+    return adjs, previous_nodes

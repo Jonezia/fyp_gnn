@@ -27,8 +27,12 @@ class GCN(nn.Module):
             The difference here with the original GCN implementation is that
             we will receive different adjacency matrix for different layer.
         '''
-        for idx in range(len(self.gcs)):
-            x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        if len(adjs) > 1:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        else:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[0]))
         return x
 
 class SuGCN(nn.Module):
@@ -66,8 +70,12 @@ class ScalarGCN(nn.Module):
             The difference here with the original GCN implementation is that
             we will receive different adjacency matrix for different layer.
         '''
-        for idx in range(len(self.gcs)):
-            x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        if len(adjs) > 1:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        else:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[0]))
         return x
 
 # scalar SGC is the same as ScalarGCN but without up-down feature transformation
@@ -85,8 +93,12 @@ class ScalarSGC(nn.Module):
             The difference here with the original GCN implementation is that
             we will receive different adjacency matrix for different layer.
         '''
-        for idx in range(len(self.gcs)):
-            x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        if len(adjs) > 1:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        else:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[0]))
         return x
     
 # class SimpleGraphConvolution(nn.Module):

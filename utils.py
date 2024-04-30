@@ -54,9 +54,9 @@ def load_data_pyg(dataset_str, normalize=True):
         multilabel = False
         num_classes = np.max(labels) + 1
 
-    train_nodes = np.nonzero(data.train_mask)
-    val_nodes = np.nonzero(data.val_mask)
-    test_nodes = np.nonzero(data.test_mask)
+    train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask)))
+    val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask)))
+    test_nodes = np.array(np.squeeze(np.nonzero(data.test_mask)))
 
     print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nodes, test_nodes, multilabel)
             
@@ -72,9 +72,9 @@ def print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nod
         print("Task Type: Multi-class Classification")
     else:
         print("Task Type: Multi-label Classification")
-    print(f"Training Nodes: {sum(train_nodes)}")
-    print(f"Validation Nodes: {sum(val_nodes)}")
-    print(f"Testing Nodes: {sum(test_nodes)}")
+    print(f"Training Nodes: {len(train_nodes)}")
+    print(f"Validation Nodes: {len(val_nodes)}")
+    print(f"Testing Nodes: {len(test_nodes)}")
     print()
 
 def parse_index_file(filename):
@@ -122,10 +122,10 @@ def load_data(dataset_str, normalize=True):
         class_map = json.load(open(prefix + "-class_map.json"))
         if isinstance(list(class_map.values())[0], list):
             lab_conversion = lambda n : n
-            multiclass = True
+            multilabel = True
         else:
             lab_conversion = lambda n : int(n)
-            multiclass = False
+            multilabel = False
 
         class_map = {conversion(k):lab_conversion(v) for k,v in class_map.items()}
 
@@ -182,13 +182,21 @@ def load_data(dataset_str, normalize=True):
             # degrees[s] = len(G[s])
             labels += [class_map[str(s)]]
 
-        if multiclass:
+        if multilabel:
             num_labels = len(labels[0])
         else:
             num_labels = np.max(labels) + 1
+
+        edges = np.array(edges)
+        labels = np.array(labels)
+        feat_data = np.array(features)
+        train_nodes = np.array(idx_train)
+        val_nodes = np.array(idx_val)
+        test_nodes = np.array(idx_test)
+
+        print_statistics(edges, labels, feat_data, num_labels, train_nodes, val_nodes, test_nodes, multilabel)
         
-        return np.array(edges), np.array(labels), np.array(features), num_labels,\
-                np.array(idx_train), np.array(idx_val), np.array(idx_test), multiclass
+        return edges, labels, feat_data, num_labels, train_nodes, val_nodes, test_nodes, multilabel
     
     names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
     objects = []
@@ -224,7 +232,6 @@ def load_data(dataset_str, normalize=True):
     idx_train = np.array(range(len(y)))
     idx_val = np.array(range(len(y), len(y)+500))
 
-
     degrees = np.zeros(len(labels), dtype=np.int64)
     edges = []
     for s in graph:
@@ -232,6 +239,9 @@ def load_data(dataset_str, normalize=True):
             edges += [[s, t]]
         degrees[s] = len(graph[s])
     labels = np.argmax(labels, axis=1)
+
+    print_statistics(np.array(edges), labels, features, np.max(labels)+1, idx_train, idx_val, idx_test, False)
+
     return np.array(edges), labels, features, np.max(labels)+1,  idx_train, idx_val, idx_test, False
 
 def sym_normalize(mx):
@@ -368,3 +378,16 @@ def roundsize(size):
 def mean_and_std(array, decimals=2):
     # returns mean & std dev of numpy array as string
     return f"{round(np.average(array),decimals)}±{round(np.std(array),decimals)}"
+
+def print_report(args, log_times, log_total_iters, log_max_memory, log_test_acc,
+                 log_test_f1, log_test_sens, log_test_spec):
+    print()
+    print(f"==== {args.dataset} {args.sampler} {args.model} {args.n_layers}layer results ====")
+    print(f"Time:           {mean_and_std(log_times)}")
+    print(f"Epochs:         {mean_and_std(log_total_iters)}")
+    print(f"Time per epoch: {mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}")
+    print(f"Max memory:     {mean_and_std(log_max_memory)}")
+    print(f"Accuracy:       {mean_and_std(log_test_acc, 3)}")
+    print(f"F1:             {mean_and_std(log_test_f1, 3)}")
+    print(f"Sensitivity:    {mean_and_std(log_test_sens, 3)}")
+    print(f"Specificity:    {mean_and_std(log_test_spec, 3)}")
