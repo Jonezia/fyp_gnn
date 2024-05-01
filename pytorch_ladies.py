@@ -47,8 +47,10 @@ parser.add_argument('--model', type=str, default='GCN',
                     help='Model: GCN/scalarGCN/SGC')
 parser.add_argument('--cuda', type=int, default=0,
                     help='Available GPU ID')
-parser.add_argument('--logging', type=bool, default=False,
-                    help='log results to files')
+parser.add_argument('--log_final', type=bool, default=False,
+                    help='log final results to file')
+parser.add_argument('--log_runs', type=bool, default=False,
+                    help='log run statistics to file')
 parser.add_argument('--early_stopping', type=bool, default=True,
                     help='whether to use early stopping')
 parser.add_argument('--normalisation', type=str, default='row_normalise',
@@ -80,7 +82,7 @@ print(f"Sampler: {args.sampler}")
 print(f"Num layers: {args.n_layers}")
 print()
 
-edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes, multiclass = load_data(args.dataset)
+edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes, multilabel = load_data_pyg(args.dataset)
 
 adj_matrix = get_adj(edges, feat_data.shape[0])
 
@@ -158,16 +160,19 @@ elif args.batching == "random":
 
 log_times = []
 log_total_iters = []
+log_best_epoch = []
 log_max_memory = []
 log_test_acc = []
 log_test_f1 = []
 log_test_sens = []
 log_test_spec = []
 
-all_res = []
+pre_training_memory = torch.cuda.max_memory_allocated()
+print(f"Pre training memory: {roundsize(pre_training_memory)}MB")
+
 for oiter in range(args.oiter):
-    if args.logging:
-        f = open(f"results/per_epoch/{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{oiter}.csv", "w+")
+    if args.log_runs:
+        f = open(f"results/per_epoch/{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{args.batching}batch_{oiter}.csv", "w+")
         f.write("epoch,train_loss,val_loss,val_f1\n")
 
     memory_before = torch.cuda.memory_allocated()
@@ -196,7 +201,7 @@ for oiter in range(args.oiter):
 
     optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
     best_val = 0
-    best_tst = -1
+    best_epoch = 0
     cnt = 0
     times = []
     time_0 = time.time()
@@ -231,7 +236,7 @@ for oiter in range(args.oiter):
                 adjs, input_nodes = sampler(np.random.randint(2**32 - 1), train_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
                 adjs = package_mxl(adjs, device)
                 output = susage.forward(feat_data[input_nodes], adjs)
-            if multiclass:
+            if multilabel:
                 loss_train = F.binary_cross_entropy_with_logits(output, labels[train_batch].float())
             else:
                 loss_train = F.cross_entropy(output, labels[train_batch])
@@ -256,7 +261,7 @@ for oiter in range(args.oiter):
                 adjs, input_nodes = sampler(np.random.randint(2**32 - 1), val_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
                 adjs = package_mxl(adjs, device)
                 output = susage.forward(feat_data[input_nodes], adjs)
-            if multiclass:
+            if multilabel:
                 loss_valid = F.binary_cross_entropy_with_logits(output, labels[val_batch].float()).detach().tolist()
                 valid_f1 = f1_score((output >= 0.5).cpu().int(), labels[val_batch].cpu(), average='samples')
             else:
@@ -267,10 +272,11 @@ for oiter in range(args.oiter):
 
         ## Logging
         print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(times), np.average(train_losses), loss_valid, valid_f1))
-        if args.logging:
+        if args.log_runs:
             f.write(f"{epoch},{np.average(train_losses)},{np.average(valid_losses)},{np.average(valid_f1s)}\n")
         if valid_f1 > best_val + 1e-2:
             best_val = valid_f1
+            best_epoch = epoch
             torch.save(susage, './save/best_model.pt')
             cnt = 0
         else:
@@ -320,19 +326,21 @@ for oiter in range(args.oiter):
     ## Epoch-level stats
     log_times.append(time_1 - time_0)
     log_total_iters.append(total_iters)
+    log_best_epoch.append(best_epoch)
     log_max_memory.append(roundsize(max_memory_allocated))
     log_test_acc.append(np.average(test_accs))
     log_test_f1.append(np.average(test_f1s))
     log_test_sens.append(np.average(test_senss))
-    log_test_spec.append(np.average(test_f1s))
+    log_test_spec.append(np.average(test_specs))
     
-    print('Iteration: %d, Test F1: %.3f' % (oiter, np.average(test_f1)))
+    print('Iteration: %d, Test F1: %.3f, Best Epoch: %d' % (oiter, np.average(test_f1), best_epoch))
 
-print_report(args, log_times, log_total_iters, log_max_memory, log_test_acc, log_test_f1, log_test_sens, log_test_spec)
+print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory, log_test_acc, log_test_f1, log_test_sens, log_test_spec)
 
-if args.logging:
+if args.log_final:
     f2 = open(f"results/final.csv", "a+")
-    f2.write(f"{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer" + "\n")
-    f2.write(f"{mean_and_std(log_times)}, {mean_and_std(log_total_iters)}, {mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}, "
+    f2.write(f"{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{args.batching}batch" + "\n")
+    f2.write(f"{mean_and_std(log_times)}, {mean_and_std(log_total_iters)}, {mean_and_std(log_best_epoch)}, "
+            f"{mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}, "
             f"{mean_and_std(log_max_memory)}, {mean_and_std(log_test_acc, 3)}, {mean_and_std(log_test_f1, 3)}, "
             f"{mean_and_std(log_test_sens, 3)}, {mean_and_std(log_test_spec, 3)}\n")

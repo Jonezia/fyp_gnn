@@ -18,14 +18,12 @@ def generate_average_run(start_directory, oiter=5):
     return avg_runs
 
 # pubmed_ladies_GCN_5layer_restrictFalse_avg_runs
-GCN_runs = generate_average_run("results/per_epoch/pubmed_ladies_GCN_2layer_restrictFalse")
-scalarGCN_runs = generate_average_run("results/per_epoch/pubmed_ladies_scalarGCN_2layer_restrictFalse")
-scalarSGC_runs = generate_average_run("results/per_epoch/pubmed_ladies_scalarSGC_2layer_restrictFalse")
+GCN_runs = generate_average_run("results/per_epoch/reddit2_ladies_GCN_2layer_fullbatch", oiter=1)
+# scalarGCN_runs = generate_average_run("results/per_epoch/flickr_ladies_scalarGCN_5layer_fullbatch")
 
 #%%
 plt.plot(GCN_runs.epoch, GCN_runs.train_loss, label="GCN")
-plt.plot(scalarGCN_runs.epoch, scalarGCN_runs.train_loss, label="ScalarGCN")
-plt.plot(scalarSGC_runs.epoch, scalarSGC_runs.train_loss, label="ScalarSGC")
+# plt.plot(scalarGCN_runs.epoch, scalarGCN_runs.train_loss, label="ScalarGCN")
 plt.legend(loc="upper right", fontsize=8)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
@@ -34,8 +32,7 @@ plt.show()
 
 #%%
 plt.plot(GCN_runs.epoch, GCN_runs.val_loss, label="GCN")
-plt.plot(scalarGCN_runs.epoch, scalarGCN_runs.val_loss, label="ScalarGCN")
-plt.plot(scalarSGC_runs.epoch, scalarSGC_runs.val_loss, label="ScalarSGC")
+# plt.plot(scalarGCN_runs.epoch, scalarGCN_runs.val_loss, label="ScalarGCN")
 plt.legend(loc="upper right", fontsize=8)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")
@@ -44,8 +41,7 @@ plt.show()
 
 #%%
 plt.plot(GCN_runs.epoch, GCN_runs.val_f1, label="GCN")
-plt.plot(scalarGCN_runs.epoch, scalarGCN_runs.val_f1, label="ScalarGCN")
-plt.plot(scalarSGC_runs.epoch, scalarSGC_runs.val_f1, label="ScalarSGC")
+# plt.plot(scalarGCN_runs.epoch, scalarGCN_runs.val_f1, label="ScalarGCN")
 plt.legend(loc="lower right", fontsize=8)
 plt.xlabel("Epoch")
 plt.ylabel("Loss")

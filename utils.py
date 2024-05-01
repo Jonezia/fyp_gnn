@@ -25,6 +25,10 @@ import sys
 import os
 
 from torch_geometric.datasets import Planetoid
+from torch_geometric.datasets import NELL
+from torch_geometric.datasets import Flickr
+from torch_geometric.datasets import Reddit2
+from torch_geometric.transforms import NormalizeFeatures
 
 def load_data_pyg(dataset_str, normalize=True):
     print(f"Loading {dataset_str} Dataset...")
@@ -36,6 +40,12 @@ def load_data_pyg(dataset_str, normalize=True):
         data = Planetoid(root='./data/Citeseer', name='Citeseer')
     elif dataset_str == "pubmed":
         data = Planetoid(root='./data/Pubmed', name='Pubmed')
+    elif dataset_str == "NELL":
+        data = NELL(root='./data/NELL', transform=NormalizeFeatures())
+    elif dataset_str == "flickr":
+        data = Flickr(root='./data/Flickr', transform=NormalizeFeatures())
+    elif dataset_str == "reddit2":
+        data = Reddit2(root="./data/Reddit2", transform=NormalizeFeatures())
     else:
         raise ValueError("Not valid dataset")
 
@@ -379,12 +389,13 @@ def mean_and_std(array, decimals=2):
     # returns mean & std dev of numpy array as string
     return f"{round(np.average(array),decimals)}±{round(np.std(array),decimals)}"
 
-def print_report(args, log_times, log_total_iters, log_max_memory, log_test_acc,
-                 log_test_f1, log_test_sens, log_test_spec):
+def print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory,
+                 log_test_acc, log_test_f1, log_test_sens, log_test_spec):
     print()
     print(f"==== {args.dataset} {args.sampler} {args.model} {args.n_layers}layer results ====")
     print(f"Time:           {mean_and_std(log_times)}")
     print(f"Epochs:         {mean_and_std(log_total_iters)}")
+    print(f"Best epoch:     {mean_and_std(log_best_epoch)}")
     print(f"Time per epoch: {mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}")
     print(f"Max memory:     {mean_and_std(log_max_memory)}")
     print(f"Accuracy:       {mean_and_std(log_test_acc, 3)}")
