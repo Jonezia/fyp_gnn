@@ -27,6 +27,7 @@ import os
 from torch_geometric.datasets import Planetoid
 from torch_geometric.datasets import NELL
 from torch_geometric.datasets import Flickr
+from torch_geometric.datasets import Reddit
 from torch_geometric.datasets import Reddit2
 from torch_geometric.transforms import NormalizeFeatures
 
@@ -44,6 +45,8 @@ def load_data_pyg(dataset_str, normalize=True):
         data = NELL(root='./data/NELL', transform=NormalizeFeatures())
     elif dataset_str == "flickr":
         data = Flickr(root='./data/Flickr', transform=NormalizeFeatures())
+    elif dataset_str == "reddit":
+        data = Reddit(root="./data/Reddit", transform=NormalizeFeatures())
     elif dataset_str == "reddit2":
         data = Reddit2(root="./data/Reddit2", transform=NormalizeFeatures())
     else:
@@ -87,6 +90,7 @@ def print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nod
     print(f"Testing Nodes: {len(test_nodes)}")
     print()
 
+## TODO: delete
 def parse_index_file(filename):
     """Parse index file."""
     index = []
@@ -94,6 +98,7 @@ def parse_index_file(filename):
         index.append(int(line.strip()))
     return index
 
+## TODO: delete
 def load_data(dataset_str, normalize=True):
     """
     Loads a dataset
@@ -304,6 +309,11 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     shape = torch.Size(sparse_mx.shape)
     return indices, values, shape
 
+def package_mxl(mxl, device):
+    if type(mxl) is list:
+        return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
+    else:
+        return torch.sparse.FloatTensor(mxl[0], mxl[1], mxl[2]).to(device) 
 
 def get_adj(edges, num_nodes):
     adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])),
@@ -387,7 +397,7 @@ def roundsize(size):
 
 def mean_and_std(array, decimals=2):
     # returns mean & std dev of numpy array as string
-    return f"{round(np.average(array),decimals)}±{round(np.std(array),decimals)}"
+    return f"{np.average(array):.{decimals}f}±{np.std(array):.{decimals}f}"
 
 def print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory,
                  log_test_acc, log_test_f1, log_test_sens, log_test_spec):

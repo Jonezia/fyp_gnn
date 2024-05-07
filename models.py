@@ -7,7 +7,7 @@ class GraphConvolution(nn.Module):
         super(GraphConvolution, self).__init__()
         self.n_in  = n_in
         self.n_out = n_out
-        self.linear = nn.Linear(n_in,  n_out)
+        self.linear = nn.Linear(n_in, n_out, bias=bias)
     def forward(self, x, adj):
         out = self.linear(x)
         return F.elu(torch.spmm(adj, out))
@@ -27,12 +27,12 @@ class GCN(nn.Module):
             The difference here with the original GCN implementation is that
             we will receive different adjacency matrix for different layer.
         '''
-        if len(adjs) > 1:
+        if type(adjs) is list:
             for idx in range(len(self.gcs)):
                 x = self.dropout(self.gcs[idx](x, adjs[idx]))
         else:
             for idx in range(len(self.gcs)):
-                x = self.dropout(self.gcs[idx](x, adjs[0]))
+                x = self.dropout(self.gcs[idx](x, adjs))
         return x
 
 class SuGCN(nn.Module):
@@ -70,12 +70,12 @@ class ScalarGCN(nn.Module):
             The difference here with the original GCN implementation is that
             we will receive different adjacency matrix for different layer.
         '''
-        if len(adjs) > 1:
+        if type(adjs) is list:
             for idx in range(len(self.gcs)):
                 x = self.dropout(self.gcs[idx](x, adjs[idx]))
         else:
             for idx in range(len(self.gcs)):
-                x = self.dropout(self.gcs[idx](x, adjs[0]))
+                x = self.dropout(self.gcs[idx](x, adjs))
         return x
 
 # scalar SGC is the same as ScalarGCN but without up-down feature transformation
@@ -93,34 +93,49 @@ class ScalarSGC(nn.Module):
             The difference here with the original GCN implementation is that
             we will receive different adjacency matrix for different layer.
         '''
-        if len(adjs) > 1:
+        if type(adjs) is list:
             for idx in range(len(self.gcs)):
                 x = self.dropout(self.gcs[idx](x, adjs[idx]))
         else:
             for idx in range(len(self.gcs)):
-                x = self.dropout(self.gcs[idx](x, adjs[0]))
+                x = self.dropout(self.gcs[idx](x, adjs))
         return x
     
-# class SimpleGraphConvolution(nn.Module):
-#     def __init__(self):
-#         super(SimpleGraphConvolution, self).__init__()
-#     def forward(self, x, adj):
-#         return F.elu(torch.spmm(adj, x))
+class SGC(nn.Module):
+    def __init__(self, nfeat, layers, dropout):
+        super(SGC, self).__init__()
+        self.layers = layers
+        self.nhid = nfeat
+        self.dropout = nn.Dropout(dropout)
+    def forward(self, x, adj_k):
+        return self.dropout(torch.spmm(adj_k, x))
     
-# class SGC(nn.Module):
-#     def __init__(self, nfeat, layers, dropout):
-#         super(SGC, self).__init__()
-#         self.layers = layers
-#         self.nhid = nfeat
-#         self.gcs = nn.ModuleList()
-#         self.dropout = nn.Dropout(dropout)
-#         for i in range(layers):
-#             self.gcs.append(SimpleGraphConvolution())
-#     def forward(self, x, adjs):
-#         '''
-#             The difference here with the original GCN implementation is that
-#             we will receive different adjacency matrix for different layer.
-#         '''
-#         for idx in range(len(self.gcs)):
-#             x = self.dropout(self.gcs[idx](x, adjs[idx]))
-#         return x
+class SIGNConvolution(nn.Module):
+    def __init__(self, n_in, n_out, bias=True):
+        super(SIGNConvolution, self).__init__()
+        self.n_in  = n_in
+        self.n_out = n_out
+        self.linear = nn.Linear(n_in, n_out, bias=bias)
+    def forward(self, x, adj):
+        out = self.linear(x)
+        return torch.spmm(adj, out)
+
+class SIGN(nn.Module):
+    def __init__(self, nfeat, nhid, layers, dropout):
+        super(SIGN, self).__init__()
+        self.layers = layers
+        self.nhid = nhid * (layers + 1)
+        self.gcs = nn.ModuleList()
+        self.dropout = nn.Dropout(dropout)
+        for i in range(layers + 1):
+            self.gcs.append(SIGNConvolution(nfeat, nhid))
+    def forward(self, x, adjs):
+        '''
+            The difference here with the original GCN implementation is that
+            we will receive different adjacency matrix for different layer.
+        '''
+        concat = torch.tensor([]).to(torch.device("cuda:0"))
+        for idx in range(len(self.gcs)):
+            out = self.dropout(self.gcs[idx](x, adjs[idx]))
+            concat = torch.cat((concat, out), dim=1)
+        return F.elu(concat)

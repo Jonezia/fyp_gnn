@@ -31,7 +31,7 @@ parser.add_argument('--pool_num', type=int, default= 10,
                     help='Number of Pool')
 parser.add_argument('--batch_num', type=int, default= 10,
                     help='Maximum Batch Number')
-parser.add_argument('--batch_size', type=int, default=512,
+parser.add_argument('--batch_size', type=int, default=1024,
                     help='size of output node in a batch')
 parser.add_argument('--n_layers', type=int, default=5,
                     help='Number of GCN layers')
@@ -47,24 +47,22 @@ parser.add_argument('--model', type=str, default='GCN',
                     help='Model: GCN/scalarGCN/SGC')
 parser.add_argument('--cuda', type=int, default=0,
                     help='Available GPU ID')
-parser.add_argument('--log_final', type=bool, default=False,
+parser.add_argument('--log_final', action=argparse.BooleanOptionalAction,
                     help='log final results to file')
-parser.add_argument('--log_runs', type=bool, default=False,
+parser.add_argument('--log_runs', action=argparse.BooleanOptionalAction,
                     help='log run statistics to file')
-parser.add_argument('--early_stopping', type=bool, default=True,
-                    help='whether to use early stopping')
+parser.add_argument('--early_stopping', action=argparse.BooleanOptionalAction,
+                    help='use early stopping')
 parser.add_argument('--normalisation', type=str, default='row_normalise',
                     help='what type of normalisation')
 parser.add_argument('--oiter', type=int, default=1,
                     help='number of outer iterations')
 parser.add_argument('--batching', type=str, default="full",
                     help='batch construction method')
+parser.add_argument('--learning_rate', type=int, default=0.001,
+                    help='optimizer learning rate')
 
 args = parser.parse_args()
-
-
-def package_mxl(mxl, device):
-    return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
 
 if args.cuda != -1:
     if torch.cuda.is_available():
@@ -97,12 +95,65 @@ else:
 
 lap_matrix = normalise(adj_matrix + sp.eye(adj_matrix.shape[0]))
 if type(feat_data) == scipy.sparse.lil_matrix:
+    print("LIL MATRIX !!!!")
     feat_data = feat_data.todense()
+if feat_data.dtype == np.float64:
+    print("64 BIT!!!")
 feat_data = feat_data.astype(np.float32)
 
 del adj_matrix
 
+## Batching
+train_batches = []
+val_batches = []
+test_batches = []
+
+if args.batching == "full":
+    train_batches.append(train_nodes)
+    val_batches.append(valid_nodes)
+    test_batches.append(test_nodes)
+elif args.batching == "random":
+    for _ in range(args.batch_num):
+        train_batches.append(np.random.choice(train_nodes, size=args.batch_size, replace=False))
+    val_batches.append(torch.randperm(len(valid_nodes))[:args.batch_size])
+    test_batches.append(test_nodes)
+elif args.batching == "random2":
+    for _ in range(args.batch_num):
+        train_batches.append(train_nodes)
+    val_batches.append(valid_nodes)
+    test_batches.append(test_nodes)
+elif args.batching == "random3":
+    np.random.shuffle(train_nodes)
+    train_batches = np.array_split(train_nodes, len(train_nodes) // args.batch_size)
+    val_batches.append(valid_nodes)
+    test_batches.append(test_nodes)
+
 print("=============== Memory Info ===============")
+# Pre-processing matrices for SGC and SIGN models
+if args.model == "SGC":
+    memory_before = torch.cuda.memory_allocated()
+    adj_sgc = lap_matrix ** args.n_layers
+    adj_sgc = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc), device)
+    memory_after = torch.cuda.memory_allocated()
+    print(f"adj_sgc size: {roundsize(memory_after - memory_before)}")
+elif args.model == "SIGN":
+    memory_before = torch.cuda.memory_allocated()
+    adj_sign = []
+    for i in range(args.n_layers + 1):
+        adj_sign.append(sparse_mx_to_torch_sparse_tensor(lap_matrix ** i))
+    adj_sign = package_mxl(adj_sign, device)
+    memory_after = torch.cuda.memory_allocated()
+    print(f"adj_sign size: {roundsize(memory_after - memory_before)}")
+elif args.sampler == "full":
+    memory_before = torch.cuda.memory_allocated()
+    adj_full = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
+    memory_after = torch.cuda.memory_allocated()
+    print(f"adj_full size: {roundsize(memory_after - memory_before)}")
+
+# Adjusting lap_matrix self-connection by epsilon for GIN
+if args.model == "GIN":
+    pass
+
 memory_before = torch.cuda.memory_allocated()
 feat_data = torch.FloatTensor(feat_data).to(device)
 memory_after = torch.cuda.memory_allocated()
@@ -111,14 +162,18 @@ memory_before = torch.cuda.memory_allocated()
 labels    = torch.LongTensor(labels).to(device) 
 memory_after = torch.cuda.memory_allocated()
 print(f"labels size: {roundsize(memory_after - memory_before)}")
-
+memory_before = torch.cuda.memory_allocated()
+test_lap = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
+memory_after = torch.cuda.memory_allocated()
+print(f"full lap_matrix size: {roundsize(memory_after - memory_before)}")
+del test_lap
 
 if args.sampler == 'ladies':
     sampler = ladies_sampler
 elif args.sampler == 'fastgcn':
     sampler = fastgcn_sampler
 elif args.sampler == 'full':
-    sampler = default_sampler
+    sampler = None
 elif args.sampler == 'receptive_field':
     sampler = default_sampler_restricted
 else:
@@ -140,20 +195,6 @@ def prepare_data(pool, sampler, batches, train_nodes, valid_nodes, samp_num_list
     jobs.append(p)
     return jobs
 
-## Batching
-train_batches = []
-val_batches = []
-test_batches = []
-
-if args.batching == "full":
-    train_batches.append(train_nodes)
-    val_batches.append(valid_nodes)
-    test_batches.append(test_nodes)
-elif args.batching == "random":
-    for _ in range(args.batch_num):
-        train_batches.append(torch.randperm(len(train_nodes))[:args.batch_size])
-    val_batches.append(torch.randperm(len(valid_nodes))[:args.batch_size])
-    test_batches.append(test_nodes)
 
 # pool = mp.Pool(args.pool_num)
 # jobs = prepare_data(pool, sampler, batches, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
@@ -167,8 +208,9 @@ log_test_f1 = []
 log_test_sens = []
 log_test_spec = []
 
-pre_training_memory = torch.cuda.max_memory_allocated()
-print(f"Pre training memory: {roundsize(pre_training_memory)}MB")
+pre_training_max_memory = torch.cuda.max_memory_allocated()
+pre_training_memory = torch.cuda.memory_allocated()
+print(f"Pre training max memory: {roundsize(pre_training_max_memory)}MB")
 
 for oiter in range(args.oiter):
     if args.log_runs:
@@ -184,13 +226,15 @@ for oiter in range(args.oiter):
         encoder = ScalarSGC(nfeat = feat_data.shape[1], layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "SGC":
         encoder = SGC(nfeat = feat_data.shape[1], layers=args.n_layers, dropout = 0.2).to(device)
+    elif args.model == "SIGN":
+        encoder = SIGN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
     else:
         raise ValueError("Unacceptable model type")
     memory_after = torch.cuda.memory_allocated()
     print(f"Encoder size: {roundsize(memory_after - memory_before)}")
+
     memory_before = torch.cuda.memory_allocated()
-    susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1])
-    susage.to(device)
+    susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1]).to(device)
     memory_after = torch.cuda.memory_allocated()
     print(f"Susage size: {roundsize(memory_after - memory_before)}")
 
@@ -199,7 +243,7 @@ for oiter in range(args.oiter):
     pytorch_total_params = sum(p.numel() for p in susage.parameters() if p.requires_grad)
     print(f"Trainable model parameters: {pytorch_total_params}")
 
-    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()))
+    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()), lr=args.learning_rate)
     best_val = 0
     best_epoch = 0
     cnt = 0
@@ -228,11 +272,18 @@ for oiter in range(args.oiter):
             optimizer.zero_grad()
             t1 = time.time()
             if args.sampler == "full":
-                adjs = package_mxl([sparse_mx_to_torch_sparse_tensor(lap_matrix)], device)
+                if args.model == "SGC":
+                    adjs = adj_sgc
+                elif args.model == "SIGN":
+                    adjs = adj_sign
+                else:
+                    adjs = adj_full
                 output = susage.forward(feat_data, adjs)
                 output = output[train_batch]
             else:
-                # TODO: change this such that we do the sampling async in the upper comment part
+                if args.model == "SGC" or args.model == "SIGN":
+                    raise ValueError("SGC/SIGN must use full sampler")
+                # TODO: change this such that we can do the sampling async in the upper comment part
                 adjs, input_nodes = sampler(np.random.randint(2**32 - 1), train_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
                 adjs = package_mxl(adjs, device)
                 output = susage.forward(feat_data[input_nodes], adjs)
@@ -254,7 +305,12 @@ for oiter in range(args.oiter):
         valid_f1s = []
         for val_batch in val_batches:
             if args.sampler == "full":
-                adjs = package_mxl([sparse_mx_to_torch_sparse_tensor(lap_matrix)], device)
+                if args.model == "SGC":
+                    adjs = adj_sgc
+                elif args.model == "SIGN":
+                    adjs = adj_sign
+                else:
+                    adjs = adj_full
                 output = susage.forward(feat_data, adjs)
                 output = output[val_batch]
             else:
@@ -293,35 +349,28 @@ for oiter in range(args.oiter):
     test_f1s = []
     test_senss = []
     test_specs = []
-    # for test_batch in test_batches:
-    #     if args.sampler == "full":
-    #         adjs = package_mxl([sparse_mx_to_torch_sparse_tensor(lap_matrix)], device)
-    #         output = best_model.forward(feat_data, adjs)
-    #         output = output[test_batch]
-    #     else:
-    #         adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
-    #         adjs = package_mxl(adjs, device)
-    #         output = best_model.forward(feat_data[input_nodes], adjs)
-    #     test_acc, test_f1, test_sens, test_spec = metrics(output.cpu(), labels[test_batch].cpu())
-    #     test_accs.append(test_acc)
-    #     test_f1s.append(test_f1)
-    #     test_senss.append(test_sens)
-    #     test_specs.append(test_spec)
-    
-    '''
-    If using full-batch inference:
-    '''
-    batch_nodes = test_nodes
-    adjs, input_nodes = default_sampler(np.random.randint(2**32 - 1), batch_nodes,
-                                    samp_num_list * 20, len(feat_data), lap_matrix, args.n_layers)
-    adjs = package_mxl(adjs, device)
-    output = best_model.forward(feat_data[input_nodes], adjs)[batch_nodes]
-    test_acc, test_f1, test_sens, test_spec = metrics(output.cpu(), labels[batch_nodes].cpu())
-    test_accs.append(test_acc)
-    test_f1s.append(test_f1)
-    test_senss.append(test_sens)
-    test_specs.append(test_spec)
-    #-----
+
+    for test_batch in test_batches:
+        # full-batch for test will always outperform sampling
+        # if args.sampler == "full":
+        if args.model == "SGC":
+            adjs = adj_sgc
+        elif args.model == "SIGN":
+            adjs = adj_sign
+        else:
+            adjs = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
+        output = susage.forward(feat_data, adjs)
+        output = best_model.forward(feat_data, adjs)
+        output = output[test_batch]
+        # else:
+        #     adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+        #     adjs = package_mxl(adjs, device)
+        #     output = best_model.forward(feat_data[input_nodes], adjs)
+        test_acc, test_f1, test_sens, test_spec = metrics(output.cpu(), labels[test_batch].cpu())
+        test_accs.append(test_acc)
+        test_f1s.append(test_f1)
+        test_senss.append(test_sens)
+        test_specs.append(test_spec)
 
     ## Epoch-level stats
     log_times.append(time_1 - time_0)
