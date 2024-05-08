@@ -297,23 +297,41 @@ def norm(l):
 def stat(l):
     return np.average(l), np.sqrt(np.var(l))
 
+# def sparse_mx_to_torch_sparse_tensor(sparse_mx):
+#     """Convert a scipy sparse matrix to a torch sparse tensor."""
+#     sparse_mx = sparse_mx.tocoo().astype(np.float32)
+#     if len(sparse_mx.row) == 0 and len(sparse_mx.col) == 0:
+#         indices = torch.LongTensor([[], []])
+#     else:
+#         indices = torch.from_numpy(
+#             np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
+#     values = torch.from_numpy(sparse_mx.data)
+#     shape = torch.Size(sparse_mx.shape)
+#     return indices, values, shape
+
+# def package_mxl(mxl, device):
+#     if type(mxl) is list:
+#         return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
+#     else:
+#         return torch.sparse.FloatTensor(mxl[0], mxl[1], mxl[2]).to(device)
+
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor."""
-    sparse_mx = sparse_mx.tocoo().astype(np.float32)
-    if len(sparse_mx.row) == 0 and len(sparse_mx.col) == 0:
-        indices = torch.LongTensor([[], []])
+    if sparse_mx.nnz == 0:
+        indices = torch.tensor([], dtype=torch.int32)
+        values = torch.tensor([], dtype=torch.float32)
+        indptr = torch.tensor([0], dtype=torch.int32)
     else:
-        indices = torch.from_numpy(
-            np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
-    values = torch.from_numpy(sparse_mx.data)
-    shape = torch.Size(sparse_mx.shape)
-    return indices, values, shape
+        indices = torch.from_numpy(sparse_mx.indices.astype(np.int32))
+        values = torch.from_numpy(sparse_mx.data.astype(np.float32))
+        indptr = torch.from_numpy(sparse_mx.indptr.astype(np.int32))
+    return indptr, indices, values
 
 def package_mxl(mxl, device):
     if type(mxl) is list:
-        return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
+        return [torch.sparse_csr_tensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
     else:
-        return torch.sparse.FloatTensor(mxl[0], mxl[1], mxl[2]).to(device) 
+        return torch.sparse_csr_tensor(mxl[0], mxl[1], mxl[2]).to(device) 
 
 def get_adj(edges, num_nodes):
     adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])),
@@ -400,7 +418,7 @@ def mean_and_std(array, decimals=2):
     return f"{np.average(array):.{decimals}f}±{np.std(array):.{decimals}f}"
 
 def print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory,
-                 log_test_acc, log_test_f1, log_test_sens, log_test_spec):
+                 log_adjs_memory, log_test_acc, log_test_f1, log_test_sens, log_test_spec):
     print()
     print(f"==== {args.dataset} {args.sampler} {args.model} {args.n_layers}layer results ====")
     print(f"Time:           {mean_and_std(log_times)}")
@@ -408,6 +426,7 @@ def print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memor
     print(f"Best epoch:     {mean_and_std(log_best_epoch)}")
     print(f"Time per epoch: {mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}")
     print(f"Max memory:     {mean_and_std(log_max_memory)}")
+    print(f"Adjs memory:    {mean_and_std(log_adjs_memory)}")
     print(f"Accuracy:       {mean_and_std(log_test_acc, 3)}")
     print(f"F1:             {mean_and_std(log_test_f1, 3)}")
     print(f"Sensitivity:    {mean_and_std(log_test_sens, 3)}")

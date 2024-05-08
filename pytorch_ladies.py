@@ -127,6 +127,8 @@ elif args.batching == "random3":
     train_batches = np.array_split(train_nodes, len(train_nodes) // args.batch_size)
     val_batches.append(valid_nodes)
     test_batches.append(test_nodes)
+else:
+    raise ValueError("Unacceptable batching type")
 
 print("=============== Memory Info ===============")
 # Pre-processing matrices for SGC and SIGN models
@@ -174,6 +176,8 @@ elif args.sampler == 'fastgcn':
     sampler = fastgcn_sampler
 elif args.sampler == 'full':
     sampler = None
+elif args.sampler == 'graphsage':
+    sampler = graphsage_sampler
 elif args.sampler == 'receptive_field':
     sampler = default_sampler_restricted
 else:
@@ -203,6 +207,7 @@ log_times = []
 log_total_iters = []
 log_best_epoch = []
 log_max_memory = []
+log_adjs_memory = []
 log_test_acc = []
 log_test_f1 = []
 log_test_sens = []
@@ -252,10 +257,13 @@ for oiter in range(args.oiter):
     total_iters = 0
     print('-' * 10)
     max_memory_allocated = 0
+    # TODO: this will just get the memory of the first adj it sees
+    max_adj_memory_allocated = 0
 
     for epoch in np.arange(args.epoch_num):
         susage.train()
         train_losses = []
+        adjs_memorys = []
         # train_data = [job.get() for job in jobs[:-1]]
         # valid_data = jobs[-1].get()
         # pool.close()
@@ -284,8 +292,11 @@ for oiter in range(args.oiter):
                 if args.model == "SGC" or args.model == "SIGN":
                     raise ValueError("SGC/SIGN must use full sampler")
                 # TODO: change this such that we can do the sampling async in the upper comment part
+                memory_before = torch.cuda.memory_allocated()
                 adjs, input_nodes = sampler(np.random.randint(2**32 - 1), train_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
                 adjs = package_mxl(adjs, device)
+                memory_after = torch.cuda.memory_allocated()
+                max_adj_memory_allocated = max(max_adj_memory_allocated, memory_after - memory_before)
                 output = susage.forward(feat_data[input_nodes], adjs)
             if multilabel:
                 loss_train = F.binary_cross_entropy_with_logits(output, labels[train_batch].float())
@@ -377,6 +388,7 @@ for oiter in range(args.oiter):
     log_total_iters.append(total_iters)
     log_best_epoch.append(best_epoch)
     log_max_memory.append(roundsize(max_memory_allocated))
+    log_adjs_memory.append(roundsize(max_adj_memory_allocated))
     log_test_acc.append(np.average(test_accs))
     log_test_f1.append(np.average(test_f1s))
     log_test_sens.append(np.average(test_senss))
@@ -384,12 +396,12 @@ for oiter in range(args.oiter):
     
     print('Iteration: %d, Test F1: %.3f, Best Epoch: %d' % (oiter, np.average(test_f1), best_epoch))
 
-print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory, log_test_acc, log_test_f1, log_test_sens, log_test_spec)
+print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory, log_adjs_memory, log_test_acc, log_test_f1, log_test_sens, log_test_spec)
 
 if args.log_final:
     f2 = open(f"results/final.csv", "a+")
     f2.write(f"{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{args.batching}batch" + "\n")
     f2.write(f"{mean_and_std(log_times)}, {mean_and_std(log_total_iters)}, {mean_and_std(log_best_epoch)}, "
-            f"{mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}, "
-            f"{mean_and_std(log_max_memory)}, {mean_and_std(log_test_acc, 3)}, {mean_and_std(log_test_f1, 3)}, "
+            f"{mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}, {mean_and_std(log_max_memory)} "
+            f"{mean_and_std(log_adjs_memory)}, {mean_and_std(log_test_acc, 3)}, {mean_and_std(log_test_f1, 3)}, "
             f"{mean_and_std(log_test_sens, 3)}, {mean_and_std(log_test_spec, 3)}\n")
