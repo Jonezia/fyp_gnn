@@ -59,7 +59,7 @@ parser.add_argument('--oiter', type=int, default=1,
                     help='number of outer iterations')
 parser.add_argument('--batching', type=str, default="full",
                     help='batch construction method')
-parser.add_argument('--learning_rate', type=int, default=0.001,
+parser.add_argument('--lr', type=float, default=0.01,
                     help='optimizer learning rate')
 
 args = parser.parse_args()
@@ -118,9 +118,8 @@ elif args.batching == "random":
     val_batches.append(torch.randperm(len(valid_nodes))[:args.batch_size])
     test_batches.append(test_nodes)
 elif args.batching == "random2":
-    for _ in range(args.batch_num):
-        train_batches.append(train_nodes)
-    val_batches.append(valid_nodes)
+    train_batches.append(train_nodes)
+    val_batches.append(torch.randperm(len(valid_nodes))[:args.batch_size])
     test_batches.append(test_nodes)
 elif args.batching == "random3":
     np.random.shuffle(train_nodes)
@@ -248,7 +247,7 @@ for oiter in range(args.oiter):
     pytorch_total_params = sum(p.numel() for p in susage.parameters() if p.requires_grad)
     print(f"Trainable model parameters: {pytorch_total_params}")
 
-    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()), lr=args.learning_rate)
+    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()), lr=args.lr)
     best_val = 0
     best_epoch = 0
     cnt = 0
@@ -363,17 +362,17 @@ for oiter in range(args.oiter):
 
     for test_batch in test_batches:
         # full-batch for test will always outperform sampling
-        # if args.sampler == "full":
         if args.model == "SGC":
             adjs = adj_sgc
         elif args.model == "SIGN":
             adjs = adj_sign
+        elif args.sampler == "full":
+            adjs = adj_full
         else:
             adjs = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
         output = susage.forward(feat_data, adjs)
         output = best_model.forward(feat_data, adjs)
         output = output[test_batch]
-        # else:
         #     adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
         #     adjs = package_mxl(adjs, device)
         #     output = best_model.forward(feat_data[input_nodes], adjs)
