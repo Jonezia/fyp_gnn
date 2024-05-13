@@ -342,43 +342,56 @@ def get_laplacian(adj):
     adj = row_normalize(adj + sp.eye(adj.shape[0]))
     return sparse_mx_to_torch_sparse_tensor(adj)
 
-def logit_to_label(out):
-    return out.argmax(dim=1)
+# def metrics(logits, y):
+#     if isinstance(y, torch.LongTensor) and y.dim() == 1 or y.ndim == 1: # Multi-class
+#         y_pred = logits.argmax(dim=1)
+
+#         if isinstance(y, torch.LongTensor):
+#             y = y.cpu()
+        
+#         cm = confusion_matrix(y, y_pred.cpu())
+#         FP = cm.sum(axis=0) - np.diag(cm)  
+#         FN = cm.sum(axis=1) - np.diag(cm)
+#         TP = np.diag(cm)
+#         TN = cm.sum() - (FP + FN + TP)
+    
+#         acc = np.diag(cm).sum() / cm.sum()
+#         micro_f1 = acc # micro f1 = accuracy for multi-class
+#         sens = TP.sum() / (TP.sum() + FN.sum())
+#         spec = TN.sum() / (TN.sum() + FP.sum())
+    
+#     else: # Multi-label
+#         y_pred = logits >= 0.5
+        
+#         tp = int((y & y_pred).sum())
+#         tn = int((~y & ~y_pred).sum())
+#         fp = int((~y & y_pred).sum())
+#         fn = int((y & ~y_pred).sum())
+        
+#         acc = (tp + tn)/(tp + fp + tn + fn)
+#         precision = tp / (tp + fp)
+#         recall = tp / (tp + fn)
+#         micro_f1 = 2 * (precision * recall) / (precision + recall)
+#         sens = (tp)/(tp + fn)
+#         spec = (tn)/(tn + fp)
+        
+#     return acc, micro_f1, sens, spec
+
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score
 
 def metrics(logits, y):
-    if isinstance(y, torch.LongTensor) and y.dim() == 1 or y.ndim == 1: # Multi-class
-        y_pred = logit_to_label(logits)
 
-        if isinstance(y, torch.LongTensor):
-            y = y.cpu()
-        
-        cm = confusion_matrix(y, y_pred.cpu())
-        FP = cm.sum(axis=0) - np.diag(cm)  
-        FN = cm.sum(axis=1) - np.diag(cm)
-        TP = np.diag(cm)
-        TN = cm.sum() - (FP + FN + TP)
-    
-        acc = np.diag(cm).sum() / cm.sum()
-        micro_f1 = acc # micro f1 = accuracy for multi-class
-        sens = TP.sum() / (TP.sum() + FN.sum())
-        spec = TN.sum() / (TN.sum() + FP.sum())
+    if y.dim() == 1: # Multi-class
+        y_pred = logits.argmax(dim=1)
     
     else: # Multi-label
         y_pred = logits >= 0.5
-        
-        tp = int((y & y_pred).sum())
-        tn = int((~y & ~y_pred).sum())
-        fp = int((~y & y_pred).sum())
-        fn = int((y & ~y_pred).sum())
-        
-        acc = (tp + tn)/(tp + fp + tn + fn)
-        precision = tp / (tp + fp)
-        recall = tp / (tp + fn)
-        micro_f1 = 2 * (precision * recall) / (precision + recall)
-        sens = (tp)/(tp + fn)
-        spec = (tn)/(tn + fp)
-        
-    return acc, micro_f1, sens, spec
+
+    acc = accuracy_score(y, y_pred)
+    micro_f1 = f1_score(y, y_pred, average='micro')
+    prec = precision_score(y, y_pred, average='micro', zero_division=0)
+    rec = recall_score(y, y_pred, average='micro', zero_division=0)
+    return acc, micro_f1, prec, rec
 
 from scipy.sparse.csgraph import shortest_path
 # uses Dijkstra's algorithm, O[N(N*k + N*log(N))],

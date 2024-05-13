@@ -59,6 +59,8 @@ parser.add_argument('--oiter', type=int, default=1,
                     help='number of outer iterations')
 parser.add_argument('--batching', type=str, default="full",
                     help='batch construction method')
+parser.add_argument('--test_batching', type=str, default="full",
+                    help='test batching method: full/sample')
 parser.add_argument('--lr', type=float, default=0.01,
                     help='optimizer learning rate')
 
@@ -285,7 +287,7 @@ for oiter in range(args.oiter):
                     adjs = adj_sign
                 else:
                     adjs = adj_full
-                output = susage.forward(feat_data, adjs)
+                output = susage.forward(feat_data[train_batch], adjs)
                 output = output[train_batch]
             else:
                 if args.model == "SGC" or args.model == "SIGN":
@@ -361,21 +363,25 @@ for oiter in range(args.oiter):
     test_specs = []
 
     for test_batch in test_batches:
-        # full-batch for test will always outperform sampling
-        if args.model == "SGC":
-            adjs = adj_sgc
-        elif args.model == "SIGN":
-            adjs = adj_sign
-        elif args.sampler == "full":
-            adjs = adj_full
+        if args.test_batching == "full":
+            # full-batch for test will always outperform sampling
+            if args.model == "SGC":
+                adjs = adj_sgc
+            elif args.model == "SIGN":
+                adjs = adj_sign
+            elif args.sampler == "full":
+                adjs = adj_full
+            else:
+                adjs = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
+            output = susage.forward(feat_data, adjs)
+            output = best_model.forward(feat_data, adjs)
+            output = output[test_batch]
+        elif args.test_batching == "sample":
+            adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+            adjs = package_mxl(adjs, device)
+            output = best_model.forward(feat_data[input_nodes], adjs)
         else:
-            adjs = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
-        output = susage.forward(feat_data, adjs)
-        output = best_model.forward(feat_data, adjs)
-        output = output[test_batch]
-        #     adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
-        #     adjs = package_mxl(adjs, device)
-        #     output = best_model.forward(feat_data[input_nodes], adjs)
+            raise ValueError("Unacceptable test_batching method")
         test_acc, test_f1, test_sens, test_spec = metrics(output.cpu(), labels[test_batch].cpu())
         test_accs.append(test_acc)
         test_f1s.append(test_f1)

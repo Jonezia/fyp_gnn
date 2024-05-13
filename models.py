@@ -139,3 +139,39 @@ class SIGN(nn.Module):
             out = self.dropout(self.gcs[idx](x, adjs[idx]))
             concat = torch.cat((concat, out), dim=1)
         return F.elu(concat)
+    
+class GATConvolution(nn.Module):
+    def __init__(self, n_in, n_out, bias=True):
+        super(GraphConvolution, self).__init__()
+        self.n_in  = n_in
+        self.n_out = n_out
+        self.linear = nn.Linear(n_in, n_out, bias=bias)
+    def forward(self, x, adj):
+        out = self.linear(x)
+
+        return F.elu(torch.spmm(adj, out))
+
+# GAT layer follows original paper closely, attention can be calculated
+# using any mechanism in this case we use a simple linear layer
+class GAT(nn.Module):
+    def __init__(self, nfeat, nhid, layers, dropout):
+        super(GAT, self).__init__()
+        self.layers = layers
+        self.nhid = nhid
+        self.gcs = nn.ModuleList()
+        self.gcs.append(GATConvolution(nfeat,  nhid))
+        self.dropout = nn.Dropout(dropout)
+        for i in range(layers-1):
+            self.gcs.append(GATConvolution(nhid,  nhid))
+    def forward(self, x, adjs):
+        '''
+            The difference here with the original GCN implementation is that
+            we will receive different adjacency matrix for different layer.
+        '''
+        if type(adjs) is list:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs[idx]))
+        else:
+            for idx in range(len(self.gcs)):
+                x = self.dropout(self.gcs[idx](x, adjs))
+        return x
