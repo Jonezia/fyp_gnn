@@ -63,6 +63,8 @@ parser.add_argument('--test_batching', type=str, default="full",
                     help='test batching method: full/sample')
 parser.add_argument('--lr', type=float, default=0.01,
                     help='optimizer learning rate')
+parser.add_argument('--n_heads', type=int, default=1,
+                    help='num heads for GAT')
 
 args = parser.parse_args()
 
@@ -82,11 +84,35 @@ print(f"Sampler: {args.sampler}")
 print(f"Num layers: {args.n_layers}")
 print()
 
-edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes, multilabel = load_data_pyg(args.dataset)
+# List inductive datasets here
+if args.dataset in ["ppi"]:
+    inductive = True
+else:
+    inductive = False
 
-adj_matrix = get_adj(edges, feat_data.shape[0])
+if inductive:
+    edges_train, labels_train, feat_data_train, num_classes_train, train_nodes, _, _, multilabel = load_data_pyg(args.dataset, split="train")
+    edges_val, labels_val, feat_data_val, num_classes_val, _, valid_nodes, _, _ = load_data_pyg(args.dataset, split="val")
+    edges_test, labels_test, feat_data_test, num_classes_test, _, _, test_nodes, _ = load_data_pyg(args.dataset, split="test")
+    num_classes = max([num_classes_train, num_classes_val, num_classes_test])
+    num_train_nodes = feat_data_train.shape[0]
+    num_val_nodes = feat_data_val.shape[0]
+    num_test_nodes = feat_data_test.shape[0]
+    num_feat = feat_data_train.shape[1]
+else:
+    edges, labels, feat_data, num_classes, train_nodes, valid_nodes, test_nodes, multilabel = load_data_pyg(args.dataset)
+    num_nodes, num_feat = feat_data.shape
 
-del edges
+if inductive:
+    adj_matrix_train = get_adj(edges_train, num_train_nodes)
+    adj_matrix_val = get_adj(edges_val, num_val_nodes)
+    adj_matrix_test = get_adj(edges_test, num_test_nodes)
+    del edges_train
+    del edges_val
+    del edges_test
+else:
+    adj_matrix = get_adj(edges, num_nodes)
+    del edges
 
 if args.normalisation == 'row_normalise':
     normalise = row_normalize
@@ -95,15 +121,149 @@ elif args.normalisation == 'sym_normalise':
 else:
     raise ValueError("Unacceptable normalisation method")
 
-lap_matrix = normalise(adj_matrix + sp.eye(adj_matrix.shape[0]))
-if type(feat_data) == scipy.sparse.lil_matrix:
-    print("LIL MATRIX !!!!")
-    feat_data = feat_data.todense()
-if feat_data.dtype == np.float64:
-    print("64 BIT!!!")
-feat_data = feat_data.astype(np.float32)
+if inductive:
+    lap_matrix_train = normalise(adj_matrix_train + sp.eye(adj_matrix_train.shape[0]))
+    lap_matrix_val = normalise(adj_matrix_val + sp.eye(adj_matrix_val.shape[0]))
+    lap_matrix_test = normalise(adj_matrix_test + sp.eye(adj_matrix_test.shape[0]))
+    feat_data_train = feat_data_train.astype(np.float32)
+    feat_data_val = feat_data_val.astype(np.float32)
+    feat_data_test = feat_data_test.astype(np.float32)
+    del adj_matrix_train
+    del adj_matrix_val
+    del adj_matrix_test
+else:
+    lap_matrix = normalise(adj_matrix + sp.eye(adj_matrix.shape[0]))
+    if type(feat_data) == sp.lil_matrix:
+        feat_data = feat_data.todense()
+    feat_data = feat_data.astype(np.float32)
+    del adj_matrix
 
-del adj_matrix
+print("=============== Memory Info ===============")
+# Pre-processing matrices for SGC and SIGN models
+if inductive:
+    if args.model == "SGC":
+        memory_before = torch.cuda.memory_allocated()
+        adj_sgc_train = lap_matrix_train ** args.n_layers
+        adj_sgc_train = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc_train), device)
+        mem_adj_sgc_train = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_sgc_train size: {roundsize(mem_adj_sgc_train)}")
+
+        memory_before = torch.cuda.memory_allocated()
+        adj_sgc_val = lap_matrix_val ** args.n_layers
+        adj_sgc_val = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc_val), device)
+        mem_adj_sgc_val = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_sgc_val size: {roundsize(mem_adj_sgc_val)}")
+
+        memory_before = torch.cuda.memory_allocated()
+        adj_sgc_test = lap_matrix_test ** args.n_layers
+        adj_sgc_test = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc_test), device)
+        mem_adj_sgc_test = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_sgc_test size: {roundsize(mem_adj_sgc_test)}")
+
+        print(f"total adj size: {roundsize(mem_adj_sgc_train + mem_adj_sgc_val + mem_adj_sgc_test)}")
+    elif args.model == "SIGN":
+        memory_before = torch.cuda.memory_allocated()
+        adj_sign_train = []
+        adj_sign_train.append(sparse_mx_to_torch_sparse_tensor(sp.eye(num_train_nodes, dtype=float, format='csr')))
+        for i in range(1, args.n_layers + 1):
+            adj_sign_train.append(sparse_mx_to_torch_sparse_tensor(lap_matrix_train ** i))
+        adj_sign_train = package_mxl(adj_sign_train, device)
+        mem_adj_sign_train = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_sign_train size: {roundsize(mem_adj_sign_train)}")
+
+        memory_before = torch.cuda.memory_allocated()
+        adj_sign_val = []
+        adj_sign_val.append(sparse_mx_to_torch_sparse_tensor(sp.eye(num_val_nodes, dtype=float, format='csr')))
+        for i in range(1, args.n_layers + 1):
+            adj_sign_val.append(sparse_mx_to_torch_sparse_tensor(lap_matrix_val ** i))
+        adj_sign_val = package_mxl(adj_sign_val, device)
+        mem_adj_sign_val = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_sign_val size: {roundsize(mem_adj_sign_val)}")
+
+        memory_before = torch.cuda.memory_allocated()
+        adj_sign_test = []
+        adj_sign_test.append(sparse_mx_to_torch_sparse_tensor(sp.eye(num_test_nodes, dtype=float, format='csr')))
+        for i in range(1, args.n_layers + 1):
+            adj_sign_test.append(sparse_mx_to_torch_sparse_tensor(lap_matrix_test ** i))
+        adj_sign_test = package_mxl(adj_sign_test, device)
+        mem_adj_sign_test = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_sign_test size: {roundsize(mem_adj_sign_test)}")
+
+        print(f"total adj size: {roundsize(mem_adj_sign_train + mem_adj_sign_val + mem_adj_sign_test)}")
+    elif args.sampler == "full":
+        memory_before = torch.cuda.memory_allocated()
+        adj_full_train = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix_train), device)
+        mem_adj_full_train = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_full size: {roundsize(mem_adj_full_train)}")
+
+        memory_before = torch.cuda.memory_allocated()
+        adj_full_val = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix_val), device)
+        mem_adj_full_val = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_full size: {roundsize(mem_adj_full_val)}")
+
+        memory_before = torch.cuda.memory_allocated()
+        adj_full_test = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix_test), device)
+        mem_adj_full_test = torch.cuda.memory_allocated() - memory_before
+        print(f"adj_full size: {roundsize(mem_adj_full_test)}")
+
+        print(f"total adj size: {roundsize(mem_adj_full_train + mem_adj_full_val + mem_adj_full_test)}")
+
+    # For these sampling styles we no longer need the lap_matrix
+    # if args.sampler in ["sgc", "sign", "full"]:
+    #     del lap_matrix_train
+    #     del lap_matrix_val
+    #     del lap_matrix_test
+else:
+    if args.model == "SGC":
+        memory_before = torch.cuda.memory_allocated()
+        adj_sgc = lap_matrix ** args.n_layers
+        adj_sgc = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc), device)
+        memory_after = torch.cuda.memory_allocated()
+        print(f"adj_sgc size: {roundsize(memory_after - memory_before)}")
+    elif args.model == "SIGN":
+        memory_before = torch.cuda.memory_allocated()
+        adj_sign = []
+        adj_sign.append(sparse_mx_to_torch_sparse_tensor(sp.eye(num_nodes, dtype=float, format='csr')))
+        for i in range(1, args.n_layers + 1):
+            adj_sign.append(sparse_mx_to_torch_sparse_tensor(lap_matrix ** i))
+        adj_sign = package_mxl(adj_sign, device)
+        memory_after = torch.cuda.memory_allocated()
+        print(f"adj_sign size: {roundsize(memory_after - memory_before)}")
+    elif args.sampler == "full":
+        memory_before = torch.cuda.memory_allocated()
+        adj_full = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
+        memory_after = torch.cuda.memory_allocated()
+        print(f"adj_full size: {roundsize(memory_after - memory_before)}")
+
+    # For these sampling styles we no longer need the lap_matrix
+    # if args.sampler in ["sgc", "sign", "full"]:
+    #     del lap_matrix
+
+memory_before = torch.cuda.memory_allocated()
+if inductive:
+    feat_data_train = torch.FloatTensor(feat_data_train).to(device)
+    feat_data_val = torch.FloatTensor(feat_data_val).to(device)
+    feat_data_test = torch.FloatTensor(feat_data_test).to(device)
+else:
+    feat_data = torch.FloatTensor(feat_data).to(device)
+memory_after = torch.cuda.memory_allocated()
+print(f"feat_data size: {roundsize(memory_after - memory_before)}")
+
+memory_before = torch.cuda.memory_allocated()
+if inductive:
+    labels_train    = torch.LongTensor(labels_train).to(device)
+    labels_val    = torch.LongTensor(labels_val).to(device) 
+    labels_test    = torch.LongTensor(labels_test).to(device) 
+else:
+    labels    = torch.LongTensor(labels).to(device) 
+memory_after = torch.cuda.memory_allocated()
+print(f"labels size: {roundsize(memory_after - memory_before)}")
+
+# memory_before = torch.cuda.memory_allocated()
+# test_lap = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
+# memory_after = torch.cuda.memory_allocated()
+# print(f"full lap_matrix size: {roundsize(memory_after - memory_before)}")
+# del test_lap
 
 ## Batching
 train_batches = []
@@ -131,45 +291,6 @@ elif args.batching == "random3":
 else:
     raise ValueError("Unacceptable batching type")
 
-print("=============== Memory Info ===============")
-# Pre-processing matrices for SGC and SIGN models
-if args.model == "SGC":
-    memory_before = torch.cuda.memory_allocated()
-    adj_sgc = lap_matrix ** args.n_layers
-    adj_sgc = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc), device)
-    memory_after = torch.cuda.memory_allocated()
-    print(f"adj_sgc size: {roundsize(memory_after - memory_before)}")
-elif args.model == "SIGN":
-    memory_before = torch.cuda.memory_allocated()
-    adj_sign = []
-    for i in range(args.n_layers + 1):
-        adj_sign.append(sparse_mx_to_torch_sparse_tensor(lap_matrix ** i))
-    adj_sign = package_mxl(adj_sign, device)
-    memory_after = torch.cuda.memory_allocated()
-    print(f"adj_sign size: {roundsize(memory_after - memory_before)}")
-elif args.sampler == "full":
-    memory_before = torch.cuda.memory_allocated()
-    adj_full = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
-    memory_after = torch.cuda.memory_allocated()
-    print(f"adj_full size: {roundsize(memory_after - memory_before)}")
-
-# Adjusting lap_matrix self-connection by epsilon for GIN
-if args.model == "GIN":
-    pass
-
-memory_before = torch.cuda.memory_allocated()
-feat_data = torch.FloatTensor(feat_data).to(device)
-memory_after = torch.cuda.memory_allocated()
-print(f"feat_data size: {roundsize(memory_after - memory_before)}")
-memory_before = torch.cuda.memory_allocated()
-labels    = torch.LongTensor(labels).to(device) 
-memory_after = torch.cuda.memory_allocated()
-print(f"labels size: {roundsize(memory_after - memory_before)}")
-memory_before = torch.cuda.memory_allocated()
-test_lap = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
-memory_after = torch.cuda.memory_allocated()
-print(f"full lap_matrix size: {roundsize(memory_after - memory_before)}")
-del test_lap
 
 if args.sampler == 'ladies':
     sampler = ladies_sampler
@@ -225,31 +346,30 @@ for oiter in range(args.oiter):
 
     memory_before = torch.cuda.memory_allocated()
     if args.model == "GCN":
-        encoder = GCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "scalarGCN":
-        encoder = ScalarGCN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
-    elif args.model == "scalarSGC":
-        encoder = ScalarSGC(nfeat = feat_data.shape[1], layers=args.n_layers, dropout = 0.2).to(device)
+        model = ScalarGCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+    elif args.model == "fixedScalarGCN":
+        model = FixedScalarGCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+    elif args.model == "scalarGCNNoFeatureTrans":
+        model = ScalarGCNNoFeatureTrans(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "SGC":
-        encoder = SGC(nfeat = feat_data.shape[1], layers=args.n_layers, dropout = 0.2).to(device)
+        model = SGC(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "SIGN":
-        encoder = SIGN(nfeat = feat_data.shape[1], nhid=args.nhid, layers=args.n_layers, dropout = 0.2).to(device)
+        model = SIGN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+    elif args.model == "GAT":
+        model = GAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
     else:
         raise ValueError("Unacceptable model type")
     memory_after = torch.cuda.memory_allocated()
-    print(f"Encoder size: {roundsize(memory_after - memory_before)}")
+    print(f"Model size: {roundsize(memory_after - memory_before)}")
 
-    memory_before = torch.cuda.memory_allocated()
-    susage  = SuGCN(encoder = encoder, num_classes=num_classes, dropout=0.5, inp = feat_data.shape[1]).to(device)
-    memory_after = torch.cuda.memory_allocated()
-    print(f"Susage size: {roundsize(memory_after - memory_before)}")
-
-    pytorch_total_params = sum(p.numel() for p in susage.parameters())
+    pytorch_total_params = sum(p.numel() for p in model.parameters())
     print(f"Total model parameters: {pytorch_total_params}")
-    pytorch_total_params = sum(p.numel() for p in susage.parameters() if p.requires_grad)
+    pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable model parameters: {pytorch_total_params}")
 
-    optimizer = optim.Adam(filter(lambda p : p.requires_grad, susage.parameters()), lr=args.lr)
+    optimizer = optim.Adam(filter(lambda p : p.requires_grad, model.parameters()), lr=args.lr)
     best_val = 0
     best_epoch = 0
     cnt = 0
@@ -262,7 +382,7 @@ for oiter in range(args.oiter):
     max_adj_memory_allocated = 0
 
     for epoch in np.arange(args.epoch_num):
-        susage.train()
+        model.train()
         train_losses = []
         adjs_memorys = []
         # train_data = [job.get() for job in jobs[:-1]]
@@ -277,34 +397,41 @@ for oiter in range(args.oiter):
 
         ## Training
         torch.cuda.reset_peak_memory_stats()
+        if inductive:
+            feat_data = feat_data_train
+            labels = labels_train
+            num_nodes = num_train_nodes
         for train_batch in train_batches:
             optimizer.zero_grad()
             t1 = time.time()
             if args.sampler == "full":
                 if args.model == "SGC":
-                    adjs = adj_sgc
+                    adjs = adj_sgc_train if inductive else adj_sgc
                 elif args.model == "SIGN":
-                    adjs = adj_sign
+                    adjs = adj_sign_train if inductive else adj_sign
                 else:
-                    adjs = adj_full
-                output = susage.forward(feat_data[train_batch], adjs)
+                    adjs = adj_full_train if inductive else adj_full
+                output = model.forward(feat_data, adjs)
                 output = output[train_batch]
             else:
                 if args.model == "SGC" or args.model == "SIGN":
                     raise ValueError("SGC/SIGN must use full sampler")
-                # TODO: change this such that we can do the sampling async in the upper comment part
+                if inductive:
+                    lap_matrix = lap_matrix_train
+
                 memory_before = torch.cuda.memory_allocated()
-                adjs, input_nodes = sampler(np.random.randint(2**32 - 1), train_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+                adjs, input_nodes = sampler(np.random.randint(2**32 - 1), train_batch, samp_num_list, num_nodes, lap_matrix, args.n_layers)
                 adjs = package_mxl(adjs, device)
                 memory_after = torch.cuda.memory_allocated()
                 max_adj_memory_allocated = max(max_adj_memory_allocated, memory_after - memory_before)
-                output = susage.forward(feat_data[input_nodes], adjs)
+
+                output = model.forward(feat_data[input_nodes], adjs)
             if multilabel:
                 loss_train = F.binary_cross_entropy_with_logits(output, labels[train_batch].float())
             else:
                 loss_train = F.cross_entropy(output, labels[train_batch])
             loss_train.backward()
-            torch.nn.utils.clip_grad_norm_(susage.parameters(), 0.2)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.2)
             optimizer.step()
             times += [time.time() - t1]
             train_losses += [loss_train.detach().tolist()]
@@ -312,23 +439,30 @@ for oiter in range(args.oiter):
         max_memory_allocated = torch.cuda.max_memory_allocated()
 
         ## Validation
-        susage.eval()
+        model.eval()
         valid_losses = []
         valid_f1s = []
+        if inductive:
+            feat_data = feat_data_val
+            labels = labels_val
+            num_nodes = num_val_nodes
         for val_batch in val_batches:
             if args.sampler == "full":
                 if args.model == "SGC":
-                    adjs = adj_sgc
+                    adjs = adj_sgc_val if inductive else adj_sgc
                 elif args.model == "SIGN":
-                    adjs = adj_sign
+                    adjs = adj_sign_val if inductive else adj_sign
                 else:
-                    adjs = adj_full
-                output = susage.forward(feat_data, adjs)
+                    adjs = adj_full_val if inductive else adj_full
+                output = model.forward(feat_data, adjs)
                 output = output[val_batch]
             else:
-                adjs, input_nodes = sampler(np.random.randint(2**32 - 1), val_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+                if inductive:
+                    lap_matrix = lap_matrix_val
+
+                adjs, input_nodes = sampler(np.random.randint(2**32 - 1), val_batch, samp_num_list, num_nodes, lap_matrix, args.n_layers)
                 adjs = package_mxl(adjs, device)
-                output = susage.forward(feat_data[input_nodes], adjs)
+                output = model.forward(feat_data[input_nodes], adjs)
             if multilabel:
                 loss_valid = F.binary_cross_entropy_with_logits(output, labels[val_batch].float()).detach().tolist()
                 valid_f1 = f1_score((output >= 0.5).cpu().int(), labels[val_batch].cpu(), average='samples')
@@ -345,7 +479,7 @@ for oiter in range(args.oiter):
         if valid_f1 > best_val + 1e-2:
             best_val = valid_f1
             best_epoch = epoch
-            torch.save(susage, './save/best_model.pt')
+            torch.save(model, './save/best_model.pt')
             cnt = 0
         else:
             cnt += 1
@@ -362,22 +496,27 @@ for oiter in range(args.oiter):
     test_senss = []
     test_specs = []
 
+    if inductive:
+        feat_data = feat_data_test
+        labels = labels_test
+        num_nodes = num_test_nodes
+        lap_matrix = lap_matrix_test
     for test_batch in test_batches:
+
         if args.test_batching == "full":
             # full-batch for test will always outperform sampling
             if args.model == "SGC":
-                adjs = adj_sgc
+                adjs = adj_sgc_test if inductive else adj_sgc
             elif args.model == "SIGN":
-                adjs = adj_sign
+                adjs = adj_sign_test if inductive else adj_sign
             elif args.sampler == "full":
-                adjs = adj_full
+                adjs = adj_full_test if inductive else adj_full
             else:
                 adjs = package_mxl(sparse_mx_to_torch_sparse_tensor(lap_matrix), device)
-            output = susage.forward(feat_data, adjs)
             output = best_model.forward(feat_data, adjs)
             output = output[test_batch]
         elif args.test_batching == "sample":
-            adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
+            adjs, input_nodes = sampler(np.random.randint(2**32 - 1), test_batch, samp_num_list, num_nodes, lap_matrix, args.n_layers)
             adjs = package_mxl(adjs, device)
             output = best_model.forward(feat_data[input_nodes], adjs)
         else:

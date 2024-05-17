@@ -29,9 +29,10 @@ from torch_geometric.datasets import NELL
 from torch_geometric.datasets import Flickr
 from torch_geometric.datasets import Reddit
 from torch_geometric.datasets import Reddit2
+from torch_geometric.datasets import PPI
 from torch_geometric.transforms import NormalizeFeatures
 
-def load_data_pyg(dataset_str, normalize=True):
+def load_data_pyg(dataset_str, normalize=True, split=None):
     print(f"Loading {dataset_str} Dataset...")
 
     data = None
@@ -49,6 +50,9 @@ def load_data_pyg(dataset_str, normalize=True):
         data = Reddit(root="./data/Reddit", transform=NormalizeFeatures())
     elif dataset_str == "reddit2":
         data = Reddit2(root="./data/Reddit2", transform=NormalizeFeatures())
+    elif dataset_str == "ppi":
+        assert(split == 'train' or split == 'val' or split == 'test')
+        data = PPI(root='data/PPI', split=split, transform=NormalizeFeatures())
     else:
         raise ValueError("Not valid dataset")
 
@@ -67,9 +71,20 @@ def load_data_pyg(dataset_str, normalize=True):
         multilabel = False
         num_classes = np.max(labels) + 1
 
-    train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask)))
-    val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask)))
-    test_nodes = np.array(np.squeeze(np.nonzero(data.test_mask)))
+    if split:
+        train_nodes = np.array([])
+        val_nodes = np.array([])
+        test_nodes = np.array([])
+        if split == 'train':
+            train_nodes = np.array([i for i in range(feat_data.shape[0])])
+        elif split == 'val':
+            val_nodes = np.array([i for i in range(feat_data.shape[0])])
+        elif split == 'test':
+            test_nodes = np.array([i for i in range(feat_data.shape[0])])
+    else:
+        train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask)))
+        val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask)))
+        test_nodes = np.array(np.squeeze(np.nonzero(data.test_mask)))
 
     print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nodes, test_nodes, multilabel)
             
@@ -329,9 +344,9 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
 
 def package_mxl(mxl, device):
     if type(mxl) is list:
-        return [torch.sparse_csr_tensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
+        return [torch.sparse_csr_tensor(mx[0], mx[1], mx[2], dtype=torch.float32).to(device) for mx in mxl]
     else:
-        return torch.sparse_csr_tensor(mxl[0], mxl[1], mxl[2]).to(device) 
+        return torch.sparse_csr_tensor(mxl[0], mxl[1], mxl[2], dtype=torch.float32).to(device) 
 
 def get_adj(edges, num_nodes):
     adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])),
