@@ -1,8 +1,9 @@
 from utils import *
 
-def default_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+def full_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     np.random.seed(seed)
     previous_nodes = batch_nodes
+    sampled = [batch_nodes]
     adjs  = []
     '''
         Sample nodes from top to bottom, based on the probability computed adaptively (layer-dependent).
@@ -11,13 +12,31 @@ def default_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_
         #     row-select the lap_matrix (U) by previously sampled nodes
         U = lap_matrix[previous_nodes , :]
         after_nodes = np.unique(U.indices)
+        sampled.append(after_nodes)
         adj = U[: , after_nodes]
         adjs += [sparse_mx_to_torch_sparse_tensor(row_normalize(adj))]
         #     Turn the sampled nodes as previous_nodes, recursively conduct sampling.
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes
+    sampled.reverse()
+    return adjs, sampled
+
+# def full_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
+#     np.random.seed(seed)
+#     previous_nodes = batch_nodes
+#     sampled = [batch_nodes]
+#     '''
+#         Sample nodes from top to bottom, based on the probability computed adaptively (layer-dependent).
+#     '''
+#     for d in range(depth):
+#         after_nodes = np.unique(lap_matrix[previous_nodes, :].indices)
+#         #     Turn the sampled nodes as previous_nodes, recursively conduct sampling.
+#         sampled.append(after_nodes)
+#         previous_nodes = after_nodes
+#     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
+#     sampled.reverse()
+#     return sampled
 
 def graphsage_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
@@ -25,6 +44,7 @@ def graphsage_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, d
     '''
     np.random.seed(seed)
     previous_nodes = batch_nodes
+    sampled = [batch_nodes]
     adjs  = []
     '''
         Sample nodes from top to bottom, based on the probability computed adaptively (layer-dependent).
@@ -40,13 +60,15 @@ def graphsage_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, d
         for row, num in zip(U, s_num):
             selected_nodes = np.random.choice(row.indices, size=num, replace=False)
             after_nodes = np.unique(np.concatenate((previous_nodes, selected_nodes)))
+        sampled.append(after_nodes)
         adj = U[: , after_nodes]
         adjs += [sparse_mx_to_torch_sparse_tensor(row_normalize(adj))]
         #     Turn the sampled nodes as previous_nodes, recursively conduct sampling.
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes
+    sampled.reverse()
+    return adjs, sampled
 
 def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
@@ -55,6 +77,7 @@ def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dep
     '''
     np.random.seed(seed)
     previous_nodes = batch_nodes
+    sampled = [batch_nodes]
     adjs  = []
     #     pre-compute the sampling probability (importance) based on the global degree (lap_matrix)
     pi = np.array(np.sum(lap_matrix.multiply(lap_matrix), axis=0))[0]
@@ -68,6 +91,7 @@ def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dep
         #     sample the next layer's nodes based on the pre-computed probability (p).
         s_num = np.min([np.sum(p > 0), samp_num_list[d]])
         after_nodes = np.random.choice(num_nodes, s_num, p = p, replace = False)
+        sampled.append(after_nodes)
         # after_nodes = np.unique(np.concatenate((after_nodes, batch_nodes)))
         #     col-select the lap_matrix (U), and then devided by the sampled probability for 
         #     unbiased-sampling. Finally, conduct row-normalization to avoid value explosion.
@@ -79,7 +103,8 @@ def fastgcn_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dep
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes
+    sampled.reverse()
+    return adjs, sampled
 
 def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
@@ -88,6 +113,7 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
     '''
     np.random.seed(seed)
     previous_nodes = batch_nodes
+    sampled = [batch_nodes]
     adjs  = []
     '''
         Sample nodes from top to bottom, based on the probability computed adaptively (layer-dependent).
@@ -103,6 +129,7 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
         after_nodes = np.random.choice(num_nodes, s_num, p = p, replace = False)
         #     Add output nodes for self-loop
         after_nodes = np.unique(np.concatenate((after_nodes, batch_nodes)))
+        sampled.append(after_nodes)
         #     col-select the lap_matrix (U), and then devided by the sampled probability for 
         #     unbiased-sampling. Finally, conduct row-normalization to avoid value explosion.
         # "unbiased-sampling": if after-node is less likely to be sampled then it is weighted more 
@@ -112,4 +139,5 @@ def ladies_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, dept
         previous_nodes = after_nodes
     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
     adjs.reverse()
-    return adjs, previous_nodes
+    sampled.reverse()
+    return adjs, sampled

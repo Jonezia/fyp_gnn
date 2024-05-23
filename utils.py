@@ -30,6 +30,7 @@ from torch_geometric.datasets import Flickr
 from torch_geometric.datasets import Reddit
 from torch_geometric.datasets import Reddit2
 from torch_geometric.datasets import PPI
+from torch_geometric.datasets import KarateClub
 from torch_geometric.transforms import NormalizeFeatures
 
 def load_data_pyg(dataset_str, normalize=True, split=None):
@@ -42,6 +43,8 @@ def load_data_pyg(dataset_str, normalize=True, split=None):
         data = Planetoid(root='./data/Citeseer', name='Citeseer')
     elif dataset_str == "pubmed":
         data = Planetoid(root='./data/Pubmed', name='Pubmed')
+    elif dataset_str == "karateClub":
+        data = KarateClub(transform=NormalizeFeatures())
     elif dataset_str == "NELL":
         data = NELL(root='./data/NELL', transform=NormalizeFeatures())
     elif dataset_str == "flickr":
@@ -82,9 +85,14 @@ def load_data_pyg(dataset_str, normalize=True, split=None):
         elif split == 'test':
             test_nodes = np.array([i for i in range(feat_data.shape[0])])
     else:
-        train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask)))
-        val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask)))
-        test_nodes = np.array(np.squeeze(np.nonzero(data.test_mask)))
+        if dataset_str == "karateClub":
+            train_nodes = np.array([i for i in range(20)])
+            val_nodes = np.array([i for i in range(20, 27)])
+            test_nodes = np.array([i for i in range(27, 34)])
+        else:
+            train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask)))
+            val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask)))
+            test_nodes = np.array(np.squeeze(np.nonzero(data.test_mask)))
 
     print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nodes, test_nodes, multilabel)
             
@@ -358,13 +366,10 @@ def get_laplacian(adj):
     return sparse_mx_to_torch_sparse_tensor(adj)
 
 # def metrics(logits, y):
-#     if isinstance(y, torch.LongTensor) and y.dim() == 1 or y.ndim == 1: # Multi-class
-#         y_pred = logits.argmax(dim=1)
-
-#         if isinstance(y, torch.LongTensor):
-#             y = y.cpu()
-        
-#         cm = confusion_matrix(y, y_pred.cpu())
+    
+#     if y.dim() == 1: # Multi-class
+#         y_pred = logit_to_label(logits)
+#         cm = confusion_matrix(y.cpu(),y_pred.cpu())
 #         FP = cm.sum(axis=0) - np.diag(cm)  
 #         FN = cm.sum(axis=1) - np.diag(cm)
 #         TP = np.diag(cm)
@@ -376,12 +381,13 @@ def get_laplacian(adj):
 #         spec = TN.sum() / (TN.sum() + FP.sum())
     
 #     else: # Multi-label
-#         y_pred = logits >= 0.5
+#         y_pred = logits >= 0
+#         y_true = y >= 0.5
         
-#         tp = int((y & y_pred).sum())
-#         tn = int((~y & ~y_pred).sum())
-#         fp = int((~y & y_pred).sum())
-#         fn = int((y & ~y_pred).sum())
+#         tp = int((y_true & y_pred).sum())
+#         tn = int((~y_true & ~y_pred).sum())
+#         fp = int((~y_true & y_pred).sum())
+#         fn = int((y_true & ~y_pred).sum())
         
 #         acc = (tp + tn)/(tp + fp + tn + fn)
 #         precision = tp / (tp + fp)
@@ -400,7 +406,8 @@ def metrics(logits, y):
         y_pred = logits.argmax(dim=1)
     
     else: # Multi-label
-        y_pred = logits >= 0.5
+        y_pred = logits >= 0
+        y = y >= 0.5
 
     acc = accuracy_score(y, y_pred)
     micro_f1 = f1_score(y, y_pred, average='micro')
@@ -445,17 +452,23 @@ def mean_and_std(array, decimals=2):
     # returns mean & std dev of numpy array as string
     return f"{np.average(array):.{decimals}f}±{np.std(array):.{decimals}f}"
 
-def print_report(args, log_times, log_total_iters, log_best_epoch, log_max_memory,
-                 log_adjs_memory, log_test_acc, log_test_f1, log_test_sens, log_test_spec):
+def print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_oiter_times, 
+    log_total_iters, log_best_epoch, log_max_train_memory, log_adjs_memory, log_max_memory,
+    log_test_acc, log_test_f1, log_test_sens, log_test_spec):
     print()
     print(f"==== {args.dataset} {args.sampler} {args.model} {args.n_layers}layer results ====")
-    print(f"Time:           {mean_and_std(log_times)}")
-    print(f"Epochs:         {mean_and_std(log_total_iters)}")
-    print(f"Best epoch:     {mean_and_std(log_best_epoch)}")
-    print(f"Time per epoch: {mean_and_std(np.array(log_times) / np.array(log_total_iters), 3)}")
-    print(f"Max memory:     {mean_and_std(log_max_memory)}")
-    print(f"Adjs memory:    {mean_and_std(log_adjs_memory)}")
-    print(f"Accuracy:       {mean_and_std(log_test_acc, 3)}")
-    print(f"F1:             {mean_and_std(log_test_f1, 3)}")
-    print(f"Sensitivity:    {mean_and_std(log_test_sens, 3)}")
-    print(f"Specificity:    {mean_and_std(log_test_spec, 3)}")
+    print(f"Pretrain mem:       {round(pretraining_memory, 2)}")
+    print(f"Pretrain time:      {round(pretraining_time, 2)}")
+    print(f"Total time:         {round(total_time, 2)}")
+    print(f"Train Time:         {mean_and_std(log_train_times)}")
+    print(f"Oiter Time:         {mean_and_std(log_oiter_times)}")
+    print(f"Epochs:             {mean_and_std(log_total_iters)}")
+    print(f"Best epoch:         {mean_and_std(log_best_epoch)}")
+    print(f"Train time / epoch: {mean_and_std(np.array(log_train_times) / np.array(log_total_iters), 3)}")
+    print(f"Max train memory:   {mean_and_std(log_max_train_memory)}")
+    print(f"Max adjs memory:    {mean_and_std(log_adjs_memory, 3)}")
+    print(f"Max memory:         {mean_and_std(log_max_memory)}")
+    print(f"Accuracy:           {mean_and_std(log_test_acc, 3)}")
+    print(f"F1:                 {mean_and_std(log_test_f1, 3)}")
+    print(f"Sensitivity:        {mean_and_std(log_test_sens, 3)}")
+    print(f"Specificity:        {mean_and_std(log_test_spec, 3)}")
