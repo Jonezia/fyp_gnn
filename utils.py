@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import time
 import sys
 import os
+import torch_sparse
 
 from torch_geometric.datasets import Planetoid
 from torch_geometric.datasets import NELL
@@ -340,21 +341,17 @@ def stat(l):
 
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor."""
-    if sparse_mx.nnz == 0:
-        indices = torch.tensor([], dtype=torch.int32)
-        values = torch.tensor([], dtype=torch.float32)
-        indptr = torch.tensor([0], dtype=torch.int32)
-    else:
-        indices = torch.from_numpy(sparse_mx.indices.astype(np.int32))
-        values = torch.from_numpy(sparse_mx.data.astype(np.float32))
-        indptr = torch.from_numpy(sparse_mx.indptr.astype(np.int32))
-    return indptr, indices, values
+    indices = torch.from_numpy(sparse_mx.indices.astype(np.int32))
+    values = torch.from_numpy(sparse_mx.data.astype(np.float32))
+    indptr = torch.from_numpy(sparse_mx.indptr.astype(np.int32))
+    size = torch.Size(sparse_mx.shape)
+    return indptr, indices, values, size
 
 def package_mxl(mxl, device):
     if type(mxl) is list:
-        return [torch.sparse_csr_tensor(mx[0], mx[1], mx[2], dtype=torch.float32).to(device) for mx in mxl]
+        return [torch.sparse_csr_tensor(mx[0], mx[1], mx[2], dtype=torch.float32, size=mx[3]).to(device) for mx in mxl]
     else:
-        return torch.sparse_csr_tensor(mxl[0], mxl[1], mxl[2], dtype=torch.float32).to(device) 
+        return torch.sparse_csr_tensor(mxl[0], mxl[1], mxl[2], dtype=torch.float32, size=mxl[3]).to(device) 
 
 def get_adj(edges, num_nodes):
     adj = sp.coo_matrix((np.ones(edges.shape[0]), (edges[:, 0], edges[:, 1])),
@@ -411,9 +408,15 @@ def metrics(logits, y):
 
     acc = accuracy_score(y, y_pred)
     micro_f1 = f1_score(y, y_pred, average='micro')
-    prec = precision_score(y, y_pred, average='micro', zero_division=0)
-    rec = recall_score(y, y_pred, average='micro', zero_division=0)
-    return acc, micro_f1, prec, rec
+    # prec = precision_score(y, y_pred, average='micro', zero_division=0)
+    # rec = recall_score(y, y_pred, average='micro', zero_division=0)
+    sens = recall_score(y, y_pred, average='micro', zero_division=0)
+    tn, fp, fn, tp = confusion_matrix(y.ravel(), y_pred.ravel(), labels=[0, 1]).ravel()
+    if tn + fp == 0:
+        spec = 0
+    else:
+        spec = tn / (tn + fp)
+    return acc, micro_f1, sens, spec
 
 from scipy.sparse.csgraph import shortest_path
 # uses Dijkstra's algorithm, O[N(N*k + N*log(N))],
@@ -452,8 +455,9 @@ def mean_and_std(array, decimals=2):
     # returns mean & std dev of numpy array as string
     return f"{np.average(array):.{decimals}f}±{np.std(array):.{decimals}f}"
 
-def print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_oiter_times, 
-    log_total_iters, log_best_epoch, log_max_train_memory, log_adjs_memory, log_max_memory,
+def print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_valid_times, 
+    log_total_iters, log_best_epoch, log_max_train_memory, log_max_val_memory, log_adjs_memory,
+    log_val_acc, log_val_f1, log_val_sens, log_val_spec,
     log_test_acc, log_test_f1, log_test_sens, log_test_spec):
     print()
     print(f"==== {args.dataset} {args.sampler} {args.model} {args.n_layers}layer results ====")
@@ -461,14 +465,18 @@ def print_report(args, pretraining_memory, pretraining_time, total_time, log_tra
     print(f"Pretrain time:      {round(pretraining_time, 2)}")
     print(f"Total time:         {round(total_time, 2)}")
     print(f"Train Time:         {mean_and_std(log_train_times)}")
-    print(f"Oiter Time:         {mean_and_std(log_oiter_times)}")
+    print(f"Valid Time:         {mean_and_std(log_valid_times)}")
     print(f"Epochs:             {mean_and_std(log_total_iters)}")
     print(f"Best epoch:         {mean_and_std(log_best_epoch)}")
     print(f"Train time / epoch: {mean_and_std(np.array(log_train_times) / np.array(log_total_iters), 3)}")
     print(f"Max train memory:   {mean_and_std(log_max_train_memory)}")
+    print(f"Max val memory:     {mean_and_std(log_max_val_memory)}")
     print(f"Max adjs memory:    {mean_and_std(log_adjs_memory, 3)}")
-    print(f"Max memory:         {mean_and_std(log_max_memory)}")
-    print(f"Accuracy:           {mean_and_std(log_test_acc, 3)}")
-    print(f"F1:                 {mean_and_std(log_test_f1, 3)}")
-    print(f"Sensitivity:        {mean_and_std(log_test_sens, 3)}")
-    print(f"Specificity:        {mean_and_std(log_test_spec, 3)}")
+    print(f"Val Accuracy:       {mean_and_std(log_val_acc, 3)}")
+    print(f"Val F1:             {mean_and_std(log_val_f1, 3)}")
+    print(f"Val sens:           {mean_and_std(log_val_sens, 3)}")
+    print(f"Val spec:           {mean_and_std(log_val_spec, 3)}")
+    print(f"Test Accuracy:      {mean_and_std(log_test_acc, 3)}")
+    print(f"Test F1:            {mean_and_std(log_test_f1, 3)}")
+    print(f"Test sens:          {mean_and_std(log_test_sens, 3)}")
+    print(f"Test spec:          {mean_and_std(log_test_spec, 3)}")

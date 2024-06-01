@@ -69,6 +69,12 @@ parser.add_argument('--n_heads', type=int, default=1,
 
 args = parser.parse_args()
 print(f"Args: {args}")
+filename = f"{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{args.batching}batch"
+if args.samp_num not in [5, 64]:
+    filename += f"_{args.samp_num}samp"
+if args.n_heads != 1:
+    filename += f"_{args.n_heads}head"
+
 
 if args.cuda != -1:
     if torch.cuda.is_available():
@@ -310,21 +316,23 @@ def prepare_data(pool, sampler, batches, train_nodes, valid_nodes, samp_num_list
 # pool = mp.Pool(args.pool_num)
 # jobs = prepare_data(pool, sampler, batches, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
 
-log_oiter_times = []
 log_train_times = []
+log_valid_times = []
 log_total_iters = []
 log_best_epoch = []
 log_max_train_memory = []
-log_max_memory = []
+log_max_val_memory = []
 log_adjs_memory = []
+log_val_acc = []
+log_val_f1 = []
+log_val_sens = []
+log_val_spec = []
 log_test_acc = []
 log_test_f1 = []
 log_test_sens = []
 log_test_spec = []
 
 for oiter in range(args.oiter):
-    oiter_time_0 = time.time()
-
     ## Batching
     train_batches = []
     val_batches = []
@@ -352,28 +360,34 @@ for oiter in range(args.oiter):
         raise ValueError("Unacceptable batching type")
 
     if args.log_runs:
-        f = open(f"results/per_epoch/{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{args.batching}batch_{oiter}.csv", "w+")
+        f = open(f"results/per_epoch/{filename}_{oiter}.csv", "w+")
         f.write("epoch,train_loss,val_loss,val_f1\n")
 
     memory_before = torch.cuda.memory_allocated()
     if args.model == "GCN":
         model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "scalarGCN":
-        model = ScalarGCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, scalar=True).to(device)
     elif args.model == "fixedScalarGCN":
-        model = FixedScalarGCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
-    elif args.model == "singleScalarGCN":
-        model = SingleScalarGCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, fixedScalar=True).to(device)
     elif args.model == "scalarGCNNoFeatureTrans":
         model = ScalarGCNNoFeatureTrans(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "SGC":
         model = SGC(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+    elif args.model == "scalarSGC":
+        model = ScalarSGC(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "SIGN":
         model = SIGN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "GAT":
         model = GAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
+    elif args.model == "fGAT":
+        model = fGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
+    elif args.model == "parallelGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
     elif args.model == "scalarGAT":
-        model = ScalarGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads, scalar=True).to(device)
+    elif args.model == "sharedGAT":
+        model = SharedGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
     else:
         raise ValueError("Unacceptable model type")
     memory_after = torch.cuda.memory_allocated()
@@ -385,17 +399,21 @@ for oiter in range(args.oiter):
     print(f"Trainable model parameters: {pytorch_total_params}")
 
     optimizer = optim.Adam(filter(lambda p : p.requires_grad, model.parameters()), lr=args.lr)
-    best_val = 0
+    best_val_acc = 0
+    best_val_f1 = 0
+    best_val_sens = 0
+    best_val_spec = 0
     best_epoch = 0
     cnt = 0
     train_times = []
+    valid_times = []
     total_iters = 0
     print('-' * 10)
 
     max_train_memory_allocated = 0
+    max_val_memory_allocated = 0
     max_adj_memory_allocated = 0
 
-    torch.cuda.reset_peak_memory_stats()
     for epoch in np.arange(args.n_epoch):
         model.train()
         train_losses = []
@@ -410,6 +428,7 @@ for oiter in range(args.oiter):
         '''
         # jobs = prepare_data(pool, sampler, train_batches, train_nodes, valid_nodes, samp_num_list, len(feat_data), lap_matrix, args.n_layers)
 
+        torch.cuda.reset_peak_memory_stats()
         ## Training
         if inductive:
             feat_data = feat_data_train
@@ -424,7 +443,6 @@ for oiter in range(args.oiter):
                     adjs_train = adj_sign_train if inductive else adj_sign
                 else:
                     adjs_train = adj_full_train if inductive else adj_full
-                torch.cuda.reset_peak_memory_stats()
                 output_train = model.forward(feat_data, adjs_train)
                 output_train = output_train[train_batch]
             else:
@@ -450,11 +468,7 @@ for oiter in range(args.oiter):
             optimizer.zero_grad()
             train_losses += [loss_train.item()]
             train_times += [time.time() - train_time_0]
-
-        # First epoch is only accurate measure of train memory as after this
-        # we have the additional memory from the optimizer
-        if epoch == 0:
-            max_train_memory_allocated = torch.cuda.max_memory_allocated()
+        max_train_memory_allocated = max(max_train_memory_allocated, torch.cuda.max_memory_allocated())
 
         ## Validation
         model.eval()
@@ -465,6 +479,8 @@ for oiter in range(args.oiter):
             labels = labels_val
             num_nodes = num_val_nodes
         for val_batch in val_batches:
+            torch.cuda.reset_peak_memory_stats()
+            valid_time_0 = time.time()
             if args.sampler == "full":
                 if args.model == "SGC":
                     adjs_val = adj_sgc_val if inductive else adj_sgc
@@ -482,6 +498,9 @@ for oiter in range(args.oiter):
                 adjs_val = package_mxl(adjs_val, device)
                 with torch.no_grad():
                     output_val = model.forward(feat_data, adjs_val, sampled)
+            valid_times += [time.time() - valid_time_0]
+            max_val_memory_allocated = max(max_val_memory_allocated, torch.cuda.max_memory_allocated())
+
             if multilabel:
                 loss_valid = F.binary_cross_entropy_with_logits(output_val, labels[val_batch].float())
                 valid_acc, valid_f1, valid_sens, valid_spec = metrics(output_val.cpu(), labels[val_batch].cpu())
@@ -489,14 +508,18 @@ for oiter in range(args.oiter):
                 loss_valid = F.cross_entropy(output_val, labels[val_batch])
                 valid_acc, valid_f1, valid_sens, valid_spec = metrics(output_val.cpu(), labels[val_batch].cpu())
             valid_losses += [loss_valid.item()]
+            
             valid_f1s += [valid_f1]
 
         ## Logging
         print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(train_times), np.average(train_losses), loss_valid, valid_f1))
         if args.log_runs:
             f.write(f"{epoch},{np.average(train_losses)},{np.average(valid_losses)},{np.average(valid_f1s)}\n")
-        if valid_f1 > best_val + 1e-2:
-            best_val = valid_f1
+        if valid_f1 > best_val_f1 + 5e-3:
+            best_val_acc = valid_acc
+            best_val_f1 = valid_f1
+            best_val_sens = valid_sens
+            best_val_spec = valid_spec
             best_epoch = epoch
             torch.save(model, './save/best_model.pt')
             cnt = 0
@@ -505,9 +528,6 @@ for oiter in range(args.oiter):
         total_iters += 1
         if args.early_stopping and cnt == args.n_stops:
             break
-    
-    # End training
-    oiter_time_1 = time.time()
 
     ## Testing
     best_model = torch.load('./save/best_model.pt')
@@ -552,16 +572,17 @@ for oiter in range(args.oiter):
         test_specs.append(test_spec)
 
     ## Epoch-level stats
-    log_oiter_times.append(oiter_time_1 - oiter_time_0)
     log_train_times.append(np.sum(train_times))
+    log_valid_times.append(np.sum(valid_times))
     log_total_iters.append(total_iters)
     log_best_epoch.append(best_epoch)
     log_max_train_memory.append(roundsize(max_train_memory_allocated))
-    print(f"MEM TRAIN: {roundsize(max_train_memory_allocated)}")
-    log_max_memory.append(roundsize(torch.cuda.max_memory_allocated()))
-    print(f"MAX MEM: {roundsize(torch.cuda.max_memory_allocated())}")
+    log_max_val_memory.append(roundsize(max_val_memory_allocated))
     log_adjs_memory.append(roundsize(max_adj_memory_allocated))
-    print(f"MEM ADJ: {roundsize(max_adj_memory_allocated)}")
+    log_val_acc.append(best_val_acc)
+    log_val_f1.append(best_val_f1)
+    log_val_sens.append(best_val_sens)
+    log_val_spec.append(best_val_spec)
     log_test_acc.append(np.average(test_accs))
     log_test_f1.append(np.average(test_f1s))
     log_test_sens.append(np.average(test_senss))
@@ -595,18 +616,21 @@ for oiter in range(args.oiter):
 
 total_time = time.time() - init_time
 
-print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_oiter_times, 
-    log_total_iters, log_best_epoch, log_max_train_memory, log_adjs_memory, log_max_memory,
+print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_valid_times, 
+    log_total_iters, log_best_epoch, log_max_train_memory, log_max_val_memory, log_adjs_memory,
+    log_val_acc, log_val_f1, log_val_sens, log_val_spec,
     log_test_acc, log_test_f1, log_test_sens, log_test_spec)
 
 if args.log_final:
     f2 = open(f"results/final.csv", "a+")
-    f2.write(f"{args.dataset}_{args.sampler}_{args.model}_{args.n_layers}layer_{args.batching}batch" + "\n")
+    f2.write(filename + "\n")
     f2.write(f"{round(pretraining_memory, 2)}, {round(pretraining_time, 2)}, {round(total_time, 2)}, "
-            f"{mean_and_std(log_train_times)}, {mean_and_std(log_oiter_times)}, "
+            f"{mean_and_std(log_train_times)}, {mean_and_std(log_valid_times)}, "
             f"{mean_and_std(log_total_iters)}, {mean_and_std(log_best_epoch)}, "
             f"{mean_and_std(np.array(log_train_times) / np.array(log_total_iters), 3)}, "
-            f"{mean_and_std(log_max_train_memory)}, {mean_and_std(log_adjs_memory, 3)}, {mean_and_std(log_max_memory)}, "
+            f"{mean_and_std(log_max_train_memory)}, {mean_and_std(log_max_val_memory)}, {mean_and_std(log_adjs_memory, 3)}, "
+            f"{mean_and_std(log_val_acc, 3)}, {mean_and_std(log_val_f1, 3)}, "
+            f"{mean_and_std(log_val_sens, 3)}, {mean_and_std(log_val_spec, 3)}, "
             f"{mean_and_std(log_test_acc, 3)}, {mean_and_std(log_test_f1, 3)}, "
             f"{mean_and_std(log_test_sens, 3)}, {mean_and_std(log_test_spec, 3)}\n")
     
