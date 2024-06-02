@@ -5,18 +5,26 @@ import scipy.sparse as sp
 from utils import *
 
 class GraphConvolution(nn.Module):
-    def __init__(self, n_in, n_out, bias=True, scalar=False, fixedScalar=False):
+    def __init__(self, n_in, n_out, bias=True, scalar=False, fixedScalar=False, nn_layers=1):
         super(GraphConvolution, self).__init__()
         self.n_in  = n_in
         self.n_out = n_out
         self.scalar = scalar
         self.fixedScalar = fixedScalar
+        self.nn_layers = nn_layers
         if scalar:
             self.s = nn.Parameter(torch.ones(1))
         elif fixedScalar:
             pass
         else:
-            self.linear = nn.Linear(n_in, n_out, bias=bias)
+            if nn_layers == 1:
+                self.linear = nn.Linear(n_in, n_out, bias=bias)
+            else:
+                self.linear = nn.Sequential()
+                self.linear.add_module("linear0", nn.Linear(n_in, n_out, bias=bias))
+                for i in range(1, nn_layers):
+                    self.linear.add_module(f"activation{i-1}", nn.ReLU())
+                    self.linear.add_module(f"linear{i}", nn.Linear(n_out, n_out, bias=bias))
     def forward(self, x, adj):
         if self.fixedScalar:
             x = torch.mul(x, 1)
@@ -27,7 +35,7 @@ class GraphConvolution(nn.Module):
         return F.elu(torch.spmm(adj, x))
 
 class GCN(nn.Module):
-    def __init__(self, nfeat, nhid, layers, dropout, nout, scalar=False, fixedScalar=False):
+    def __init__(self, nfeat, nhid, layers, dropout, nout, scalar=False, fixedScalar=False, nn_layers=1):
         super(GCN, self).__init__()
         assert(not(scalar and fixedScalar))
         self.layers = layers
@@ -36,7 +44,7 @@ class GCN(nn.Module):
         self.gcs.append(GraphConvolution(nfeat,  nhid))
         self.dropout = nn.Dropout(dropout)
         for i in range(layers-1):
-            self.gcs.append(GraphConvolution(nhid,  nhid, scalar=scalar, fixedScalar=fixedScalar))
+            self.gcs.append(GraphConvolution(nhid,  nhid, scalar=scalar, fixedScalar=fixedScalar, nn_layers=nn_layers))
         self.linear =  nn.Linear(nhid, nout)
     def forward(self, x, adjs, sampled = None):
         '''
@@ -51,37 +59,6 @@ class GCN(nn.Module):
             for idx in range(len(self.gcs)):
                 x = self.dropout(self.gcs[idx](x, adjs))
         return self.linear(x)
-
-# # OldGCN folds the final linear into aggregation loop
-# class OldGCN(nn.Module):
-#     def __init__(self, nfeat, nhid, layers, dropout, nout, arch=None):
-#         super(OldGCN, self).__init__()
-#         self.layers = layers
-#         self.nhid = nhid
-#         self.gcs = nn.ModuleList()
-#         self.gcs.append(GraphConvolution(nfeat,  nhid))
-#         self.dropout = nn.Dropout(dropout)
-#         for i in range(layers-2):
-#             if self.arch == "scalarGCN":
-#                 self.gcs.append(ScalarGraphConvolution())
-#             elif self.arch == "fixedScalarGCN":
-#                 self.gcs.append(FixedScalarGraphConvolution())
-#             else:
-#                 self.gcs.append(GraphConvolution(nhid,  nhid))
-#         self.gcs.append(GraphConvolution(nhid,  nout))
-#     def forward(self, x, adjs, sampled = None):
-#         '''
-#             The difference here with the original GCN implementation is that
-#             we will receive different adjacency matrix for different layer.
-#         '''
-#         if sampled is not None:
-#             x = x[sampled[0]]
-#             for idx in range(len(self.gcs)):
-#                 x = self.dropout(self.gcs[idx](x, adjs[idx]))
-#         else:
-#             for idx in range(len(self.gcs)):
-#                 x = self.dropout(self.gcs[idx](x, adjs))
-#         return x
 
 # Same as ScalarGCN but without initial feature transformation
 # aggregate in n_feat and transform n_feat -> n_out
@@ -145,11 +122,18 @@ class SGC(nn.Module):
         return self.linear(x)
     
 class ScalarSGC(nn.Module):
-    def __init__(self, nfeat, nhid, layers, dropout, nout):
+    def __init__(self, nfeat, nhid, layers, dropout, nout, bias=True, nn_layers=1):
         super(ScalarSGC, self).__init__()
         self.layers = layers
         self.dropout = nn.Dropout(dropout)
-        self.w = nn.Linear(nfeat, nhid)
+        if nn_layers == 1:
+            self.w = nn.Linear(nfeat, nhid)
+        else:
+            self.w = nn.Sequential()
+            self.w.add_module("linear0", nn.Linear(nfeat, nhid, bias=bias))
+            for i in range(1, nn_layers):
+                self.w.add_module(f"activation{i-1}", nn.ReLU())
+                self.w.add_module(f"linear{i}", nn.Linear(nhid, nhid, bias=bias))
         self.linear =  nn.Linear(nhid, nout)
     def forward(self, x, adj_k):
         x = self.w(x)

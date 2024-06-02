@@ -32,6 +32,7 @@ from torch_geometric.datasets import Reddit
 from torch_geometric.datasets import Reddit2
 from torch_geometric.datasets import PPI
 from torch_geometric.datasets import KarateClub
+from torch_geometric.datasets import Actor
 from torch_geometric.transforms import NormalizeFeatures
 
 def load_data_pyg(dataset_str, normalize=True, split=None):
@@ -54,6 +55,8 @@ def load_data_pyg(dataset_str, normalize=True, split=None):
         data = Reddit(root="./data/Reddit", transform=NormalizeFeatures())
     elif dataset_str == "reddit2":
         data = Reddit2(root="./data/Reddit2", transform=NormalizeFeatures())
+    elif dataset_str == "actor":
+        data = Actor(root="./data/Actor", transform=NormalizeFeatures())
     elif dataset_str == "ppi":
         assert(split == 'train' or split == 'val' or split == 'test')
         data = PPI(root='data/PPI', split=split, transform=NormalizeFeatures())
@@ -455,7 +458,8 @@ def mean_and_std(array, decimals=2):
     # returns mean & std dev of numpy array as string
     return f"{np.average(array):.{decimals}f}±{np.std(array):.{decimals}f}"
 
-def print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_valid_times, 
+def print_report(args, pretraining_memory, pretraining_time, total_time, 
+    model_size, total_params, trainable_params, log_train_times, log_valid_times, 
     log_total_iters, log_best_epoch, log_max_train_memory, log_max_val_memory, log_adjs_memory,
     log_val_acc, log_val_f1, log_val_sens, log_val_spec,
     log_test_acc, log_test_f1, log_test_sens, log_test_spec):
@@ -464,6 +468,9 @@ def print_report(args, pretraining_memory, pretraining_time, total_time, log_tra
     print(f"Pretrain mem:       {round(pretraining_memory, 2)}")
     print(f"Pretrain time:      {round(pretraining_time, 2)}")
     print(f"Total time:         {round(total_time, 2)}")
+    print(f"Model size:         {round(model_size, 2)}")
+    print(f"Total params:       {total_params}")
+    print(f"Trainable params:   {trainable_params}")
     print(f"Train Time:         {mean_and_std(log_train_times)}")
     print(f"Valid Time:         {mean_and_std(log_valid_times)}")
     print(f"Epochs:             {mean_and_std(log_total_iters)}")

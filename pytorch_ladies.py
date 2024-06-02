@@ -66,6 +66,8 @@ parser.add_argument('--lr', type=float, default=0.005,
                     help='optimizer learning rate')
 parser.add_argument('--n_heads', type=int, default=1,
                     help='num heads for GAT')
+parser.add_argument('--nn_layers', type=int, default=1,
+                    help='num layers feature trans for Scalar models')
 
 args = parser.parse_args()
 print(f"Args: {args}")
@@ -74,7 +76,8 @@ if args.samp_num not in [5, 64]:
     filename += f"_{args.samp_num}samp"
 if args.n_heads != 1:
     filename += f"_{args.n_heads}head"
-
+if args.nn_layers != 1:
+    filename += f"_{args.nn_layers}nn"
 
 if args.cuda != -1:
     if torch.cuda.is_available():
@@ -332,6 +335,10 @@ log_test_f1 = []
 log_test_sens = []
 log_test_spec = []
 
+model_size = 0
+total_params = 0
+trainable_params = 0
+
 for oiter in range(args.oiter):
     ## Batching
     train_batches = []
@@ -367,7 +374,7 @@ for oiter in range(args.oiter):
     if args.model == "GCN":
         model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "scalarGCN":
-        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, scalar=True).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, scalar=True, nn_layers=args.nn_layers).to(device)
     elif args.model == "fixedScalarGCN":
         model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, fixedScalar=True).to(device)
     elif args.model == "scalarGCNNoFeatureTrans":
@@ -375,7 +382,7 @@ for oiter in range(args.oiter):
     elif args.model == "SGC":
         model = SGC(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "scalarSGC":
-        model = ScalarSGC(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = ScalarSGC(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, nn_layers=args.nn_layers).to(device)
     elif args.model == "SIGN":
         model = SIGN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
     elif args.model == "GAT":
@@ -390,13 +397,11 @@ for oiter in range(args.oiter):
         model = SharedGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
     else:
         raise ValueError("Unacceptable model type")
-    memory_after = torch.cuda.memory_allocated()
-    print(f"Model size: {roundsize(memory_after - memory_before)}")
 
-    pytorch_total_params = sum(p.numel() for p in model.parameters())
-    print(f"Total model parameters: {pytorch_total_params}")
-    pytorch_total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Trainable model parameters: {pytorch_total_params}")
+    memory_after = torch.cuda.memory_allocated()
+    model_size = roundsize(memory_after - memory_before)
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     optimizer = optim.Adam(filter(lambda p : p.requires_grad, model.parameters()), lr=args.lr)
     best_val_acc = 0
@@ -616,7 +621,8 @@ for oiter in range(args.oiter):
 
 total_time = time.time() - init_time
 
-print_report(args, pretraining_memory, pretraining_time, total_time, log_train_times, log_valid_times, 
+print_report(args, pretraining_memory, pretraining_time, total_time, 
+    model_size, total_params, trainable_params, log_train_times, log_valid_times, 
     log_total_iters, log_best_epoch, log_max_train_memory, log_max_val_memory, log_adjs_memory,
     log_val_acc, log_val_f1, log_val_sens, log_val_spec,
     log_test_acc, log_test_f1, log_test_sens, log_test_spec)
@@ -625,6 +631,7 @@ if args.log_final:
     f2 = open(f"results/final.csv", "a+")
     f2.write(filename + "\n")
     f2.write(f"{round(pretraining_memory, 2)}, {round(pretraining_time, 2)}, {round(total_time, 2)}, "
+             f"{round(model_size, 2)}, {total_params}, {trainable_params}, "
             f"{mean_and_std(log_train_times)}, {mean_and_std(log_valid_times)}, "
             f"{mean_and_std(log_total_iters)}, {mean_and_std(log_best_epoch)}, "
             f"{mean_and_std(np.array(log_train_times) / np.array(log_total_iters), 3)}, "
