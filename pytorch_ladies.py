@@ -38,7 +38,7 @@ parser.add_argument('--n_layers', type=int, default=5,
                     help='Number of GCN layers')
 parser.add_argument('--n_iters', type=int, default=1,
                     help='Number of iteration to run on a batch')
-parser.add_argument('--n_stops', type=int, default=20,
+parser.add_argument('--n_stops', type=int, default=30,
                     help='Stop after number of epochs that f1 dont increase')
 parser.add_argument('--samp_num', type=int, default=64,
                     help='Number of sampled nodes per layer')
@@ -404,6 +404,7 @@ for oiter in range(args.oiter):
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     optimizer = optim.Adam(filter(lambda p : p.requires_grad, model.parameters()), lr=args.lr)
+
     best_val_acc = 0
     best_val_f1 = 0
     best_val_sens = 0
@@ -441,6 +442,7 @@ for oiter in range(args.oiter):
             num_nodes = num_train_nodes
         for train_batch in train_batches:
             train_time_0 = time.time()
+            # full batch
             if args.sampler == "full":
                 if args.model == "SGC":
                     adjs_train = adj_sgc_train if inductive else adj_sgc
@@ -450,6 +452,7 @@ for oiter in range(args.oiter):
                     adjs_train = adj_full_train if inductive else adj_full
                 output_train = model.forward(feat_data, adjs_train)
                 output_train = output_train[train_batch]
+            # sampling
             else:
                 if args.model == "SGC" or args.model == "SIGN":
                     raise ValueError("SGC/SIGN must use full sampler")
@@ -463,6 +466,7 @@ for oiter in range(args.oiter):
                 max_adj_memory_allocated = max(max_adj_memory_allocated, memory_after - memory_before)
 
                 output_train = model.forward(feat_data, adjs_train, sampled)
+
             if multilabel:
                 loss_train = F.binary_cross_entropy_with_logits(output_train, labels[train_batch].float())
             else:
