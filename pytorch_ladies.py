@@ -67,7 +67,9 @@ parser.add_argument('--lr', type=float, default=0.005,
 parser.add_argument('--n_heads', type=int, default=1,
                     help='num heads for GAT')
 parser.add_argument('--nn_layers', type=int, default=1,
-                    help='num layers feature trans for Scalar models')
+                    help='num layers per feature transformation')
+parser.add_argument('--fnn_layers', type=int, default=1,
+                    help='num layers per orig. feat. -> embedding for attn. transformation')
 
 args = parser.parse_args()
 print(f"Args: {args}")
@@ -78,6 +80,8 @@ if args.n_heads != 1:
     filename += f"_{args.n_heads}head"
 if args.nn_layers != 1:
     filename += f"_{args.nn_layers}nn"
+if args.fnn_layers != 1:
+    filename += f"_{args.nn_layers}fnn"
 
 if args.cuda != -1:
     if torch.cuda.is_available():
@@ -371,30 +375,43 @@ for oiter in range(args.oiter):
         f.write("epoch,train_loss,val_loss,val_f1\n")
 
     memory_before = torch.cuda.memory_allocated()
+    # nn_layers controls the number of layers in each feature transformation NN
     if args.model == "GCN":
-        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, nn_layers=args.nn_layers).to(device)
     elif args.model == "scalarGCN":
-        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, scalar=True, nn_layers=args.nn_layers).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, scalar=True, nn_layers=args.nn_layers).to(device)
     elif args.model == "fixedScalarGCN":
-        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, fixedScalar=True).to(device)
-    elif args.model == "scalarGCNNoFeatureTrans":
-        model = ScalarGCNNoFeatureTrans(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = GCN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, fixedScalar=True).to(device)
+
     elif args.model == "SGC":
-        model = SGC(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = SGC(nfeat = num_feat, nout=num_classes, layers=args.n_layers, dropout=0.2).to(device)
     elif args.model == "scalarSGC":
-        model = ScalarSGC(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, nn_layers=args.nn_layers).to(device)
+        model = ScalarSGC(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, nn_layers=args.nn_layers).to(device)
     elif args.model == "SIGN":
-        model = SIGN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2).to(device)
+        model = SIGN(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2).to(device)
+
+    # for scalar models we pass scalar=True, for feature-based models we pass orig_features
+    # fnn_layers controls the number of layers in each orig feature -> embedding for attention NN
     elif args.model == "GAT":
-        model = GAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
-    elif args.model == "fGAT":
-        model = fGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
+        model = GAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, nn_layers=args.nn_layers).to(device)
     elif args.model == "parallelGAT":
-        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, nn_layers=args.nn_layers).to(device)
     elif args.model == "scalarGAT":
-        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads, scalar=True).to(device)
-    elif args.model == "sharedGAT":
-        model = SharedGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout = 0.2, alpha=0.2, nheads=args.n_heads).to(device)
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, scalar=True, nn_layers=args.nn_layers).to(device)
+    elif args.model == "FGAT":
+        model = GAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+    elif args.model == "parallelFGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+    elif args.model == "scalarFGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, scalar=True, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+    elif args.model == "SAFGAT":
+        model = SAFGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+    elif args.model == "parallelSAFGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, single_adjacency=True, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+    elif args.model == "scalarSAFGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, single_adjacency=True, orig_features=num_feat, scalar=True, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+    elif args.model == "scalarSAFGATv2":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, single_adjacency=True, orig_features=num_feat, scalar=True, safgat_merge=True, nn_layers=args.nn_layers).to(device)
     else:
         raise ValueError("Unacceptable model type")
 
