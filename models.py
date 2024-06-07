@@ -157,34 +157,34 @@ class GraphAttentionHead(nn.Module):
     # If from_feat is not None then we are feeding in feature info for FGAT
     # If both from_feat & to_feat are not None then we are feeding in feature info for sampled from/to nodes,
     # otherwise if just from_feat is not None then we are feeding in all the features for full batch
-    def forward(self, h, adj, from_feat = None, to_feat = None, fW = None, a_src = None, a_dest = None):
+    def forward(self, h, adj, from_feat = None, to_feat = None):
         if self.scalar:
             Wh = torch.mul(h, self.s)
         else:
             Wh = self.W(h) # h.shape: (N, in_features), Wh.shape: (N, out_features=D)
         N = Wh.size(0)
-        Wh = self.leakyrelu(Wh)
+        # Wh = self.leakyrelu(Wh)
 
         # FGAT
         if self.orig_features is not None:
-            attention = feature_attention(adj, self.fW, self.a_src, self.a_dest, from_feat, to_feat, self.dropout)
+            attention = feature_attention(adj, self.fW, self.a_src, self.a_dest, from_feat, to_feat, self.dropout, self.leakyrelu)
         # normal GAT
         else:
             if from_feat is not None or to_feat is not None:
                 raise ValueError("GAT cannot use orig. features, use FGAT")
-            attention = gat_attention(adj, Wh, self.a_src, self.a_dest, self.dropout)
+            attention = gat_attention(adj, Wh, self.a_src, self.a_dest, self.dropout, self.leakyrelu)
         
         h_prime = torch.sparse.mm(attention, Wh)
         # m, n = adj.shape
         # h_prime = torch_sparse.spmm(indices, new_vals, m, n, Wh)
         return F.elu(h_prime)
     
-def gat_attention(adj, Wh, a_src, a_dest, dropout):
+def gat_attention(adj, Wh, a_src, a_dest, dropout, leakyrelu):
     f_1 = torch.matmul(Wh, a_src).squeeze(1)
     f_2 = torch.matmul(Wh, a_dest).squeeze(1)
-    return construct_attn_matrix(adj, f_1, f_2, dropout)
+    return construct_attn_matrix(adj, f_1, f_2, dropout, leakyrelu)
 
-def feature_attention(adj, feature_trans, a_src, a_dest, from_feat, to_feat, dropout):
+def feature_attention(adj, feature_trans, a_src, a_dest, from_feat, to_feat, dropout, leakyrelu):
     # for FGAT we must either get the features of all the nodes (in from_feat)
     # or the features of the from and to nodes for the layer
     # with sampling
@@ -205,9 +205,9 @@ def feature_attention(adj, feature_trans, a_src, a_dest, from_feat, to_feat, dro
             h_from = from_feat
         f_1 = torch.matmul(h_from, a_src).squeeze(1)
         f_2 = torch.matmul(h_from, a_dest).squeeze(1)
-    return construct_attn_matrix(adj, f_1, f_2, dropout)
+    return construct_attn_matrix(adj, f_1, f_2, dropout, leakyrelu)
 
-def construct_attn_matrix(adj, f_1, f_2, dropout):
+def construct_attn_matrix(adj, f_1, f_2, dropout, leakyrelu):
     # convert from sparse CSR tensor to sparse COO tensor
     adj = adj.to_sparse()
     indices = adj.indices()
@@ -215,6 +215,8 @@ def construct_attn_matrix(adj, f_1, f_2, dropout):
     # row_indices, col_indices should have shape nnz. This is equivalent to
     # iterating over each adj nnz and summing the appropriate scores
     new_vals = f_1[indices[0]] + f_2[indices[1]]
+    new_vals = leakyrelu(new_vals)
+    new_vals = F.dropout(new_vals, dropout)
 
     # TODO: could keep as CSR and write your own torch sparse softmax
     attention = torch.sparse_coo_tensor(
@@ -224,7 +226,6 @@ def construct_attn_matrix(adj, f_1, f_2, dropout):
         device="cuda:0"
     )
     attention = torch.sparse.softmax(attention, dim=1)
-    # attention = F.dropout(attention, dropout)
     return attention
 
 # covers: GAT, FGAT
@@ -274,6 +275,7 @@ class SAFGAT(nn.Module):
         super(SAFGAT, self).__init__()
         assert(orig_features is not None)
         self.dropout = nn.Dropout(dropout)
+        self.dropout_raw = dropout
         self.layers = layers
         self.orig_features = orig_features
         self.nheads = nheads
@@ -296,8 +298,6 @@ class SAFGAT(nn.Module):
         self.leakyrelu = nn.LeakyReLU(alpha)
 
     def init_weights(self):
-        for fW in self.fWs:
-            nn.init.xavier_uniform_(fW.data)
         for a_src in self.a_srcs:
             nn.init.xavier_uniform_(a_src.data)
         for a_dest in self.a_dests:
@@ -314,21 +314,55 @@ class SAFGAT(nn.Module):
                 to_feat = feat_data[sampled[idx]]
                 adj = adjs[idx]
                 # precalculate each head's attention for given layer
-                attentions = [feature_attention(adj, self.fWs[i], self.a_srcs[i], self.a_dests[i], from_feat, to_feat, self.dropout) for i in range(self.nheads)]
+                attentions = [feature_attention(adj, self.fWs[i], self.a_srcs[i], self.a_dests[i], from_feat, to_feat, self.dropout_raw, self.leakyrelu) for i in range(self.nheads)]
                 x = self.dropout(torch.cat([self.gcs[idx][head_idx](x, attentions[head_idx]) for head_idx in range(len(self.gcs[idx]))], dim=1))
         else:
             x = feat_data
             # precalculate each head's attention
-            attentions = [feature_attention(adjs, self.fWs[i], self.a_srcs[i], self.a_dests[i], feat_data, None, self.dropout) for i in range(self.nheads)]
+            attentions = [feature_attention(adjs, self.fWs[i], self.a_srcs[i], self.a_dests[i], feat_data, None, self.dropout_raw, self.leakyrelu) for i in range(self.nheads)]
             for idx in range(len(self.gcs)):
                 x = self.dropout(torch.cat([self.gcs[idx][head_idx](x, attentions[head_idx]) for head_idx in range(len(self.gcs[idx]))], dim=1))
         return self.linear(x)
 
-# covers: ParallelGAT, ScalarGAT, ParallelFGAT, ScalarFGAT, ParallelSAFGAT, ScalarSAFGAT
+# GAT that just uses adjacency matrix instead of learning any based on attention
+# like a GCN except we have multiple heads with different feature mappings
+class ZAGAT(nn.Module):
+    def __init__(self, nfeat, nhid, nout, layers, dropout, alpha, nheads, nn_layers=1):
+        super(ZAGAT, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.dropout_raw = dropout
+        self.layers = layers
+        self.nheads = nheads
+        self.gcs = nn.ModuleList()
+        # Because we calculate the attention outside the GraphAttentionHeads we use GraphConvolution instead
+        # Initial layer
+        self.gcs.append(nn.ModuleList([GraphConvolution(nfeat, nhid, nn_layers) for _ in range(nheads)]))
+        # Hidden layers
+        for i in range(layers-1):
+            self.gcs.append(nn.ModuleList([GraphConvolution(nhid * nheads, nhid, nn_layers) for _ in range(nheads)]))
+        # Output transformation
+        self.linear = nn.Linear(nhid * nheads, nout)
+
+        self.leakyrelu = nn.LeakyReLU(alpha)
+
+    def forward(self, feat_data, adjs, sampled = None):
+        # sampling
+        if sampled is not None:
+            x = feat_data[sampled[0]]
+            # iterate over layers
+            for idx in range(len(self.gcs)):
+                x = self.dropout(torch.cat([self.gcs[idx][head_idx](x, adjs[idx]) for head_idx in range(len(self.gcs[idx]))], dim=1))
+        else:
+            x = feat_data
+            for idx in range(len(self.gcs)):
+                x = self.dropout(torch.cat([self.gcs[idx][head_idx](x, adjs) for head_idx in range(len(self.gcs[idx]))], dim=1))
+        return self.linear(x)
+
+# covers: ParallelGAT, ScalarGAT, ParallelFGAT, ScalarFGAT, ParallelSAFGAT, ScalarSAFGAT, ParallelZAGAT, ScalarZAGAT
 # this implementation utilises head splitting
 class ParallelGAT(nn.Module):
     def __init__(self, nfeat, nhid, nout, layers, dropout, alpha, nheads, scalar=False, orig_features=None,
-                 single_adjacency=False, safgat_merge=False, nn_layers=1, fnn_layers=1):
+                 single_adjacency=False, safgat_merge=False, nn_layers=1, fnn_layers=1, zero_attention=False):
         if safgat_merge:
             assert scalar and single_adjacency
 
@@ -337,9 +371,12 @@ class ParallelGAT(nn.Module):
         self.layers = layers
         self.nout = nout
         self.head_streams = nn.ModuleList()
+        self.linear = nn.Linear(nhid * nheads, nout)
     
         for _ in range(nheads):
-            if single_adjacency:
+            if zero_attention:
+                self.head_streams.append(GraphZeroAttentionStream(nfeat, nhid, nout, layers, dropout, alpha, nn_layers=nn_layers, scalar=scalar))
+            elif single_adjacency:
                 if safgat_merge:
                     # ScalarSAFGATv2
                     self.head_streams.append(ScalarSAFGATv2Stream(nfeat, nhid, nout, layers, dropout, alpha, nn_layers=nn_layers))
@@ -352,18 +389,14 @@ class ParallelGAT(nn.Module):
                 self.head_streams.append(GraphAttentionStream(nfeat, nhid, nout, layers, dropout, alpha,
                     scalar=scalar, orig_features=orig_features, nn_layers=nn_layers, fnn_layers=fnn_layers))
 
-    # Should only be used for inference, otherwise run heads forward+backward individually
     def forward(self, feat_data, adjs, sampled = None):
         n = feat_data.shape[0]
-        # with sampling the output is of shape (len(batch_nodes), nout)
-        if sampled is not None:
-            out = torch.zeros(len(sampled[-1]), self.nout).to(torch.device("cuda:0"))
-        # otherwise the output is of shape (n, nout)
-        else:
-            out = torch.zeros(n, self.nout).to(torch.device("cuda:0"))
+        concat = torch.tensor([]).to(torch.device("cuda:0"))
         for head_stream in self.head_streams:
-            out += head_stream.forward(feat_data, adjs, sampled)
-        return out
+            out = head_stream.forward(feat_data, adjs, sampled)
+            concat = torch.cat((concat, out), dim=1)
+        concat = self.dropout(concat)
+        return self.linear(concat)
 
 # used in: ParallelGAT, ScalarGAT, ParallelFGAT, ScalarFGAT
 class GraphAttentionStream(nn.Module):
@@ -381,8 +414,6 @@ class GraphAttentionStream(nn.Module):
         for i in range(layers-1):
             self.head_gcs.append(GraphAttentionHead(nhid, nhid, dropout=dropout, alpha=alpha, scalar=scalar,
                 orig_features=orig_features, nn_layers=nn_layers, fnn_layers=fnn_layers))
-        # Output transformation
-        self.linear = nn.Linear(nhid, nout)
 
     def forward(self, feat_data, adjs, sampled = None):
         # ParallelFGAT / ScalarFGAT
@@ -396,7 +427,6 @@ class GraphAttentionStream(nn.Module):
                 x = feat_data
                 for idx in range(len(self.head_gcs)):
                     x = self.dropout(self.head_gcs[idx](x, adjs, feat_data))
-            return self.linear(x)
         # ParallelGAT / ScalarGAT
         else:
             # sampling
@@ -406,7 +436,7 @@ class GraphAttentionStream(nn.Module):
                 x = feat_data
                 for idx in range(len(self.head_gcs)):
                     x = self.dropout(self.head_gcs[idx](x, adjs))
-            return self.linear(x)
+        return x
 
 # used in: ParallelSAFGAT, ScalarSAFGAT
 class GraphSingleAttentionStream(nn.Module):
@@ -416,6 +446,7 @@ class GraphSingleAttentionStream(nn.Module):
         assert(orig_features is not None)
 
         self.dropout = nn.Dropout(dropout)
+        self.dropout_raw = dropout
         self.layers = layers
         self.orig_features = orig_features
         self.scalar = scalar
@@ -426,8 +457,6 @@ class GraphSingleAttentionStream(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar, nn_layers=nn_layers))
-        # Output transformation
-        self.linear = nn.Linear(nhid, nout)
 
         self.fW = generate_tiered_model(nfeat, nhid, nn_layers=fnn_layers)
         self.a_src = nn.Parameter(torch.FloatTensor(nhid, 1))
@@ -437,7 +466,6 @@ class GraphSingleAttentionStream(nn.Module):
         self.leakyrelu = nn.LeakyReLU(alpha)
 
     def init_weights(self):
-        nn.init.xavier_uniform_(self.fW.data)
         nn.init.xavier_uniform_(self.a_src.data)
         nn.init.xavier_uniform_(self.a_dest.data)
 
@@ -454,15 +482,15 @@ class GraphSingleAttentionStream(nn.Module):
                 # for sampled, we use the learnt attn function to calculate mini adj per layer
                 from_feat = feat_data[sampled[idx+1]]
                 to_feat = feat_data[sampled[idx]]
-                attention = feature_attention(adjs[idx], self.fW, self.a_src, self.a_dest, from_feat, to_feat, self.dropout)
+                attention = feature_attention(adjs[idx], self.fW, self.a_src, self.a_dest, from_feat, to_feat, self.dropout_raw, self.leakyrelu)
                 x = self.dropout(self.head_gcs[idx](x, attention))
         else:
             x = feat_data
             # for full, because the adj per layer is constant we calculate it once and use for all layers
-            attention = feature_attention(adjs, self.fW, self.a_src, self.a_dest, feat_data, None, self.dropout)
+            attention = feature_attention(adjs, self.fW, self.a_src, self.a_dest, feat_data, None, self.dropout_raw, self.leakyrelu)
             for idx in range(len(self.head_gcs)):
                 x = self.dropout(self.head_gcs[idx](x, attention))
-        return self.linear(x)
+        return x
     
 # model uses the single feature transformation of scalarisation as the feature transformation for the single attention
 # i.e. instead of multipling feat_data by fW to get embeddings for the attention function, we simply
@@ -474,6 +502,7 @@ class ScalarSAFGATv2Stream(nn.Module):
         # GraphSingleAttentionStreams can onl be used with feature-based attention
 
         self.dropout = nn.Dropout(dropout)
+        self.dropout_raw = dropout
         self.layers = layers
 
         self.init_trans = generate_tiered_model(nfeat, nhid, nn_layers, bias=bias)
@@ -485,8 +514,6 @@ class ScalarSAFGATv2Stream(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=True))
-        # Output transformation
-        self.linear = nn.Linear(nhid, nout)
 
         self.a_src = nn.Parameter(torch.FloatTensor(nhid, 1))
         self.a_dest = nn.Parameter(torch.FloatTensor(nhid, 1))
@@ -509,14 +536,40 @@ class ScalarSAFGATv2Stream(nn.Module):
                 from_feat = feat_data[sampled[idx+1]]
                 to_feat = feat_data[sampled[idx]]
                 # we pass init_trans as the transformation function for attention
-                attention = feature_attention(adjs[idx], self.init_trans, self.a_src, self.a_dest, from_feat, to_feat, self.dropout)
+                attention = feature_attention(adjs[idx], self.init_trans, self.a_src, self.a_dest, from_feat, to_feat, self.dropout_raw, self.leakyrelu)
                 x = self.dropout(self.head_gcs[idx](x, attention))
         else:
             x = feat_data
             x = self.init_trans(x)
             # for full, because the adj per layer is constant we calculate it once and use for all layers
             # we pass the transformed features for attention calculation
-            attention = feature_attention(adjs, None, self.a_src, self.a_dest, x, None, self.dropout)
+            attention = feature_attention(adjs, None, self.a_src, self.a_dest, x, None, self.dropout_raw, self.leakyrelu)
             for idx in range(len(self.head_gcs)):
                 x = self.dropout(self.head_gcs[idx](x, attention))
-        return self.linear(x)
+        return x
+    
+# used in: ParallelZAGAT, ScalarZAGAT
+class GraphZeroAttentionStream(nn.Module):
+    def __init__(self, nfeat, nhid, nout, layers, dropout, alpha, scalar=False, nn_layers=1):
+        super(GraphZeroAttentionStream, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.layers = layers
+
+        self.head_gcs = nn.ModuleList()
+        # Initial layer
+        self.head_gcs.append(GraphConvolution(nfeat, nhid, nn_layers=nn_layers))
+        # Hidden layers
+        for i in range(layers-1):
+            self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar, nn_layers=nn_layers))
+
+    def forward(self, feat_data, adjs, sampled = None):
+        # sampling
+        if sampled is not None:
+            x = feat_data[sampled[0]]
+            for idx in range(len(self.head_gcs)):
+                x = self.dropout(self.head_gcs[idx](x, adjs[idx]))
+        else:
+            x = feat_data
+            for idx in range(len(self.head_gcs)):
+                x = self.dropout(self.head_gcs[idx](x, adjs))
+        return x

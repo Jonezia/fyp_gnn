@@ -398,12 +398,14 @@ for oiter in range(args.oiter):
         model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, nn_layers=args.nn_layers).to(device)
     elif args.model == "scalarGAT":
         model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, scalar=True, nn_layers=args.nn_layers).to(device)
+
     elif args.model == "FGAT":
         model = GAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
     elif args.model == "parallelFGAT":
         model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
     elif args.model == "scalarFGAT":
         model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, scalar=True, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
+
     elif args.model == "SAFGAT":
         model = SAFGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, orig_features=num_feat, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
     elif args.model == "parallelSAFGAT":
@@ -412,6 +414,13 @@ for oiter in range(args.oiter):
         model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, single_adjacency=True, orig_features=num_feat, scalar=True, nn_layers=args.nn_layers, fnn_layers=args.fnn_layers).to(device)
     elif args.model == "scalarSAFGATv2":
         model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, single_adjacency=True, orig_features=num_feat, scalar=True, safgat_merge=True, nn_layers=args.nn_layers).to(device)
+
+    elif args.model == "ZAGAT":
+        model = ZAGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, nn_layers=args.nn_layers).to(device)
+    elif args.model == "parallelZAGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, nn_layers=args.nn_layers, zero_attention=True).to(device)
+    elif args.model == "scalarZAGAT":
+        model = ParallelGAT(nfeat = num_feat, nhid=args.nhid, nout=num_classes, layers=args.n_layers, dropout=0.2, alpha=0.2, nheads=args.n_heads, scalar=True, nn_layers=args.nn_layers, zero_attention=True).to(device)
     else:
         raise ValueError("Unacceptable model type")
 
