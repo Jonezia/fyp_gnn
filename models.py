@@ -52,7 +52,7 @@ class GCN(nn.Module):
         self.gcs.append(GraphConvolution(nfeat, nhid, nn_layers=nn_layers))
         self.dropout = nn.Dropout(dropout)
         for i in range(layers-1):
-            self.gcs.append(GraphConvolution(nhid, nhid, nn_layers=nn_layers, scalar=scalar, fixedScalar=fixedScalar))
+            self.gcs.append(GraphConvolution(nhid, nhid, scalar=scalar, fixedScalar=fixedScalar))
         self.linear =  nn.Linear(nhid, nout)
     def forward(self, x, adjs, sampled = None):
         '''
@@ -242,7 +242,7 @@ class GAT(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.gcs.append(nn.ModuleList([GraphAttentionHead(nhid * nheads, nhid, dropout=dropout, alpha=alpha,
-                orig_features=orig_features, nn_layers=nn_layers, fnn_layers=fnn_layers) for _ in range(nheads)]))
+                orig_features=orig_features, fnn_layers=fnn_layers) for _ in range(nheads)]))
         # Output transformation
         self.linear = nn.Linear(nhid * nheads, nout)
 
@@ -285,7 +285,7 @@ class SAFGAT(nn.Module):
         self.gcs.append(nn.ModuleList([GraphConvolution(nfeat, nhid, nn_layers) for _ in range(nheads)]))
         # Hidden layers
         for i in range(layers-1):
-            self.gcs.append(nn.ModuleList([GraphConvolution(nhid * nheads, nhid, nn_layers) for _ in range(nheads)]))
+            self.gcs.append(nn.ModuleList([GraphConvolution(nhid * nheads, nhid) for _ in range(nheads)]))
         # Output transformation
         self.linear = nn.Linear(nhid * nheads, nout)
 
@@ -339,7 +339,7 @@ class ZAGAT(nn.Module):
         self.gcs.append(nn.ModuleList([GraphConvolution(nfeat, nhid, nn_layers) for _ in range(nheads)]))
         # Hidden layers
         for i in range(layers-1):
-            self.gcs.append(nn.ModuleList([GraphConvolution(nhid * nheads, nhid, nn_layers) for _ in range(nheads)]))
+            self.gcs.append(nn.ModuleList([GraphConvolution(nhid * nheads, nhid) for _ in range(nheads)]))
         # Output transformation
         self.linear = nn.Linear(nhid * nheads, nout)
 
@@ -413,7 +413,7 @@ class GraphAttentionStream(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.head_gcs.append(GraphAttentionHead(nhid, nhid, dropout=dropout, alpha=alpha, scalar=scalar,
-                orig_features=orig_features, nn_layers=nn_layers, fnn_layers=fnn_layers))
+                orig_features=orig_features, fnn_layers=fnn_layers))
 
     def forward(self, feat_data, adjs, sampled = None):
         # ParallelFGAT / ScalarFGAT
@@ -456,7 +456,7 @@ class GraphSingleAttentionStream(nn.Module):
         self.head_gcs.append(GraphConvolution(nfeat, nhid, nn_layers=nn_layers))
         # Hidden layers
         for i in range(layers-1):
-            self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar, nn_layers=nn_layers))
+            self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar))
 
         self.fW = generate_tiered_model(nfeat, nhid, nn_layers=fnn_layers)
         self.a_src = nn.Parameter(torch.FloatTensor(nhid, 1))
@@ -560,7 +560,7 @@ class GraphZeroAttentionStream(nn.Module):
         self.head_gcs.append(GraphConvolution(nfeat, nhid, nn_layers=nn_layers))
         # Hidden layers
         for i in range(layers-1):
-            self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar, nn_layers=nn_layers))
+            self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar))
 
     def forward(self, feat_data, adjs, sampled = None):
         # sampling

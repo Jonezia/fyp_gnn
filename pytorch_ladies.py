@@ -38,7 +38,7 @@ parser.add_argument('--n_layers', type=int, default=5,
                     help='Number of GCN layers')
 parser.add_argument('--n_iters', type=int, default=1,
                     help='Number of iteration to run on a batch')
-parser.add_argument('--n_stops', type=int, default=30,
+parser.add_argument('--n_stops', type=int, default=20,
                     help='Stop after number of epochs that f1 dont increase')
 parser.add_argument('--samp_num', type=int, default=64,
                     help='Number of sampled nodes per layer')
@@ -54,15 +54,15 @@ parser.add_argument('--log_runs', action=argparse.BooleanOptionalAction,
                     help='log run statistics to file')
 parser.add_argument('--early_stopping', action=argparse.BooleanOptionalAction,
                     help='use early stopping')
-parser.add_argument('--normalisation', type=str, default='row_normalise',
+parser.add_argument('--normalisation', type=str, default='sym_normalise',
                     help='what type of normalisation')
 parser.add_argument('--oiter', type=int, default=1,
                     help='number of outer iterations')
-parser.add_argument('--batching', type=str, default="full",
+parser.add_argument('--batching', type=str, default="repeat",
                     help='batch construction method')
 parser.add_argument('--test_batching', type=str, default="full",
                     help='test batching method: full/sample')
-parser.add_argument('--lr', type=float, default=0.005,
+parser.add_argument('--lr', type=float, default=0.001,
                     help='optimizer learning rate')
 parser.add_argument('--n_heads', type=int, default=1,
                     help='num heads for GAT')
@@ -70,6 +70,10 @@ parser.add_argument('--nn_layers', type=int, default=1,
                     help='num layers per feature transformation')
 parser.add_argument('--fnn_layers', type=int, default=1,
                     help='num layers per orig. feat. -> embedding for attn. transformation')
+parser.add_argument('--log_memory_snapshot', action=argparse.BooleanOptionalAction,
+                    help='log pytorch memory snapshot')
+parser.add_argument('--improvement_threshold', type=float, default=0,
+                    help='valid f1 improvement threshold to stop overfitting')
 
 args = parser.parse_args()
 print(f"Args: {args}")
@@ -92,9 +96,10 @@ if args.cuda != -1:
 else:
     device = torch.device("cpu")
 
-torch.cuda.memory._record_memory_history(
-    max_entries=1000000
-)
+if args.log_memory_snapshot:
+    torch.cuda.memory._record_memory_history(
+        max_entries=1000000
+    )
 
 print("=============== Experiment Settings ===============")
 print(f"Dataset: {args.dataset}")
@@ -160,7 +165,7 @@ else:
 print("=============== Memory Info ===============")
 # Pre-processing matrices for SGC and SIGN models
 if inductive:
-    if args.model == "SGC":
+    if args.model == "SGC" or args.model == "scalarSGC":
         memory_before = torch.cuda.memory_allocated()
         adj_sgc_train = lap_matrix_train ** args.n_layers
         adj_sgc_train = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc_train), device)
@@ -233,7 +238,7 @@ if inductive:
     #     del lap_matrix_val
     #     del lap_matrix_test
 else:
-    if args.model == "SGC":
+    if args.model == "SGC" or args.model == "scalarSGC":
         memory_before = torch.cuda.memory_allocated()
         adj_sgc = lap_matrix ** args.n_layers
         adj_sgc = package_mxl(sparse_mx_to_torch_sparse_tensor(adj_sgc), device)
@@ -355,12 +360,13 @@ for oiter in range(args.oiter):
         test_batches.append(test_nodes)
     elif args.batching == "random":
         for _ in range(args.batch_num):
-            train_batches.append(np.random.choice(train_nodes, size=args.batch_size, replace=False))
+            train_batches.append(np.random.choice(train_nodes, size=min(args.batch_size, len(train_nodes)), replace=False))
         val_batches.append(torch.randperm(len(valid_nodes))[:args.batch_size])
         test_batches.append(test_nodes)
-    elif args.batching == "random2":
-        train_batches.append(train_nodes)
-        val_batches.append(torch.randperm(len(valid_nodes))[:args.batch_size])
+    elif args.batching == "repeat":
+        for _ in range(args.batch_num):
+            train_batches.append(train_nodes)
+        val_batches.append(valid_nodes)
         test_batches.append(test_nodes)
     elif args.batching == "random3":
         np.random.shuffle(train_nodes)
@@ -470,7 +476,7 @@ for oiter in range(args.oiter):
             train_time_0 = time.time()
             # full batch
             if args.sampler == "full":
-                if args.model == "SGC":
+                if args.model == "SGC" or args.model == "scalarSGC":
                     adjs_train = adj_sgc_train if inductive else adj_sgc
                 elif args.model == "SIGN":
                     adjs_train = adj_sign_train if inductive else adj_sign
@@ -480,7 +486,7 @@ for oiter in range(args.oiter):
                 output_train = output_train[train_batch]
             # sampling
             else:
-                if args.model == "SGC" or args.model == "SIGN":
+                if args.model == "SGC" or args.model == "scalarSGC" or args.model == "SIGN":
                     raise ValueError("SGC/SIGN must use full sampler")
                 if inductive:
                     lap_matrix = lap_matrix_train
@@ -517,7 +523,7 @@ for oiter in range(args.oiter):
             torch.cuda.reset_peak_memory_stats()
             valid_time_0 = time.time()
             if args.sampler == "full":
-                if args.model == "SGC":
+                if args.model == "SGC" or args.model == "scalarSGC":
                     adjs_val = adj_sgc_val if inductive else adj_sgc
                 elif args.model == "SIGN":
                     adjs_val = adj_sign_val if inductive else adj_sign
@@ -550,7 +556,7 @@ for oiter in range(args.oiter):
         print(("Epoch: %d (%.1fs) Train Loss: %.2f    Valid Loss: %.2f Valid F1: %.3f") % (epoch, np.sum(train_times), np.average(train_losses), loss_valid, valid_f1))
         if args.log_runs:
             f.write(f"{epoch},{np.average(train_losses)},{np.average(valid_losses)},{np.average(valid_f1s)}\n")
-        if valid_f1 > best_val_f1 + 5e-3:
+        if valid_f1 > best_val_f1 + args.improvement_threshold:
             best_val_acc = valid_acc
             best_val_f1 = valid_f1
             best_val_sens = valid_sens
@@ -580,7 +586,7 @@ for oiter in range(args.oiter):
     for test_batch in test_batches:
         if args.test_batching == "full":
             # full-batch for test normally outperform sampling
-            if args.model == "SGC":
+            if args.model == "SGC" or args.model == "scalarSGC":
                 adjs_test = adj_sgc_test if inductive else adj_sgc
             elif args.model == "SIGN":
                 adjs_test = adj_sign_test if inductive else adj_sign
@@ -644,10 +650,11 @@ for oiter in range(args.oiter):
     gc.collect()
     torch.cuda.empty_cache() 
 
-    try:
-       torch.cuda.memory._dump_snapshot(f"mem_log.pickle")
-    except Exception as e:
-       raise ValueError(f"Failed to capture memory snapshot {e}")
+    if args.log_memory_snapshot:
+        try:
+            torch.cuda.memory._dump_snapshot(f"mem_log.pickle")
+        except Exception as e:
+            raise ValueError(f"Failed to capture memory snapshot {e}")
 
 total_time = time.time() - init_time
 
@@ -670,5 +677,6 @@ if args.log_final:
             f"{mean_and_std(log_val_sens, 3)}, {mean_and_std(log_val_spec, 3)}, "
             f"{mean_and_std(log_test_acc, 3)}, {mean_and_std(log_test_f1, 3)}, "
             f"{mean_and_std(log_test_sens, 3)}, {mean_and_std(log_test_spec, 3)}\n")
-    
-torch.cuda.memory._record_memory_history(enabled=None)
+
+if args.log_memory_snapshot:
+    torch.cuda.memory._record_memory_history(enabled=None)
