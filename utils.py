@@ -33,8 +33,10 @@ from torch_geometric.datasets import Reddit2
 from torch_geometric.datasets import PPI
 from torch_geometric.datasets import KarateClub
 from torch_geometric.datasets import Actor
+from torch_geometric.datasets import HeterophilousGraphDataset
 from torch_geometric.transforms import NormalizeFeatures
 
+# Loads data using Pytorch geometric's methods
 def load_data_pyg(dataset_str, normalize=True, split=None):
     print(f"Loading {dataset_str} Dataset...")
 
@@ -60,6 +62,12 @@ def load_data_pyg(dataset_str, normalize=True, split=None):
     elif dataset_str == "ppi":
         assert(split == 'train' or split == 'val' or split == 'test')
         data = PPI(root='data/PPI', split=split, transform=NormalizeFeatures())
+    elif dataset_str == "amazonRatings":
+        data = HeterophilousGraphDataset(root='data/AmazonRatings', name="Amazon-Ratings", transform=NormalizeFeatures())
+    elif dataset_str == "tolokers":
+        data = HeterophilousGraphDataset(root='data/Tolokers', name="Tolokers", transform=NormalizeFeatures())
+    elif dataset_str == "minesweeper":
+        data = HeterophilousGraphDataset(root='data/Minesweeper', name="Minesweeper", transform=NormalizeFeatures())
     else:
         raise ValueError("Not valid dataset")
 
@@ -93,6 +101,10 @@ def load_data_pyg(dataset_str, normalize=True, split=None):
             train_nodes = np.array([i for i in range(20)])
             val_nodes = np.array([i for i in range(20, 27)])
             test_nodes = np.array([i for i in range(27, 34)])
+        elif dataset_str == "actor" or dataset_str == "amazonRatings" or dataset_str == "tolokers" or dataset_str == "minesweeper":
+            train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask[:,0])))
+            val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask[:,0])))
+            test_nodes = np.array(np.squeeze(np.nonzero(data.test_mask[:,0])))
         else:
             train_nodes = np.array(np.squeeze(np.nonzero(data.train_mask)))
             val_nodes = np.array(np.squeeze(np.nonzero(data.val_mask)))
@@ -117,7 +129,6 @@ def print_statistics(edges, labels, feat_data, num_classes, train_nodes, val_nod
     print(f"Testing Nodes: {len(test_nodes)}")
     print()
 
-## TODO: delete
 def parse_index_file(filename):
     """Parse index file."""
     index = []
@@ -125,7 +136,7 @@ def parse_index_file(filename):
         index.append(int(line.strip()))
     return index
 
-## TODO: delete
+# loads data using raw files, alternative to load_data_pyg
 def load_data(dataset_str, normalize=True):
     """
     Loads a dataset
@@ -324,24 +335,6 @@ def norm(l):
 def stat(l):
     return np.average(l), np.sqrt(np.var(l))
 
-# def sparse_mx_to_torch_sparse_tensor(sparse_mx):
-#     """Convert a scipy sparse matrix to a torch sparse tensor."""
-#     sparse_mx = sparse_mx.tocoo().astype(np.float32)
-#     if len(sparse_mx.row) == 0 and len(sparse_mx.col) == 0:
-#         indices = torch.LongTensor([[], []])
-#     else:
-#         indices = torch.from_numpy(
-#             np.vstack((sparse_mx.row, sparse_mx.col)).astype(np.int64))
-#     values = torch.from_numpy(sparse_mx.data)
-#     shape = torch.Size(sparse_mx.shape)
-#     return indices, values, shape
-
-# def package_mxl(mxl, device):
-#     if type(mxl) is list:
-#         return [torch.sparse.FloatTensor(mx[0], mx[1], mx[2]).to(device) for mx in mxl]
-#     else:
-#         return torch.sparse.FloatTensor(mxl[0], mxl[1], mxl[2]).to(device)
-
 def sparse_mx_to_torch_sparse_tensor(sparse_mx):
     """Convert a scipy sparse matrix to a torch sparse tensor."""
     indices = torch.from_numpy(sparse_mx.indices.astype(np.int32))
@@ -365,39 +358,6 @@ def get_laplacian(adj):
     adj = row_normalize(adj + sp.eye(adj.shape[0]))
     return sparse_mx_to_torch_sparse_tensor(adj)
 
-# def metrics(logits, y):
-    
-#     if y.dim() == 1: # Multi-class
-#         y_pred = logit_to_label(logits)
-#         cm = confusion_matrix(y.cpu(),y_pred.cpu())
-#         FP = cm.sum(axis=0) - np.diag(cm)  
-#         FN = cm.sum(axis=1) - np.diag(cm)
-#         TP = np.diag(cm)
-#         TN = cm.sum() - (FP + FN + TP)
-    
-#         acc = np.diag(cm).sum() / cm.sum()
-#         micro_f1 = acc # micro f1 = accuracy for multi-class
-#         sens = TP.sum() / (TP.sum() + FN.sum())
-#         spec = TN.sum() / (TN.sum() + FP.sum())
-    
-#     else: # Multi-label
-#         y_pred = logits >= 0
-#         y_true = y >= 0.5
-        
-#         tp = int((y_true & y_pred).sum())
-#         tn = int((~y_true & ~y_pred).sum())
-#         fp = int((~y_true & y_pred).sum())
-#         fn = int((y_true & ~y_pred).sum())
-        
-#         acc = (tp + tn)/(tp + fp + tn + fn)
-#         precision = tp / (tp + fp)
-#         recall = tp / (tp + fn)
-#         micro_f1 = 2 * (precision * recall) / (precision + recall)
-#         sens = (tp)/(tp + fn)
-#         spec = (tn)/(tn + fp)
-        
-#     return acc, micro_f1, sens, spec
-
 from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, precision_score, recall_score
 
 def metrics(logits, y):
@@ -411,8 +371,6 @@ def metrics(logits, y):
 
     acc = accuracy_score(y, y_pred)
     micro_f1 = f1_score(y, y_pred, average='micro')
-    # prec = precision_score(y, y_pred, average='micro', zero_division=0)
-    # rec = recall_score(y, y_pred, average='micro', zero_division=0)
     sens = recall_score(y, y_pred, average='micro', zero_division=0)
     tn, fp, fn, tp = confusion_matrix(y.ravel(), y_pred.ravel(), labels=[0, 1]).ravel()
     if tn + fp == 0:
@@ -420,35 +378,6 @@ def metrics(logits, y):
     else:
         spec = tn / (tn + fp)
     return acc, micro_f1, sens, spec
-
-from scipy.sparse.csgraph import shortest_path
-# uses Dijkstra's algorithm, O[N(N*k + N*log(N))],
-# where k is the average number of connected edges per node and N is |V|
-def find_overlapping_k_hops(adj_matrix, indices, k):
-    # Compute the shortest path distances from the starting nodes
-    distances = shortest_path(adj_matrix, indices=indices, return_predecessors=False, method="D")
-    # Find the indices of all nodes within k hops
-    within_k_hops = np.nonzero(np.any(distances <= k, axis=0))[0]
-    return within_k_hops
-
-from collections import deque
-# Uses BFS, O(|V| + |E|) i.e. good for sparse matrices
-def find_overlapping_k_hops_bfs(adj_matrix, indices, k):
-    n = adj_matrix.shape[0]
-    visited = np.zeros(n, dtype=bool)
-    queue = deque(indices)
-    within_k_hops = set(indices)
-
-    for _ in range(k):
-        for _ in range(len(queue)):
-            node = queue.popleft()
-            for neighbor in adj_matrix.getrow(node).indices:
-                if not visited[neighbor]:
-                    visited[neighbor] = True
-                    queue.append(neighbor)
-                    within_k_hops.add(neighbor)
-
-    return np.array(list(within_k_hops))
 
 def roundsize(size):
     # returns size in MB

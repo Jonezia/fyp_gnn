@@ -22,22 +22,6 @@ def full_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_mat
     sampled.reverse()
     return adjs, sampled
 
-# def full_sampler_restricted(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
-#     np.random.seed(seed)
-#     previous_nodes = batch_nodes
-#     sampled = [batch_nodes]
-#     '''
-#         Sample nodes from top to bottom, based on the probability computed adaptively (layer-dependent).
-#     '''
-#     for d in range(depth):
-#         after_nodes = np.unique(lap_matrix[previous_nodes, :].indices)
-#         #     Turn the sampled nodes as previous_nodes, recursively conduct sampling.
-#         sampled.append(after_nodes)
-#         previous_nodes = after_nodes
-#     #     Reverse the sampled probability from bottom to top. Only require input how the lastly sampled nodes.
-#     sampled.reverse()
-#     return sampled
-
 def graphsage_sampler(seed, batch_nodes, samp_num_list, num_nodes, lap_matrix, depth):
     '''
         GraphSage sampler: Sample a fixed number of neighbours per node.

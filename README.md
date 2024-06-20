@@ -1,42 +1,49 @@
 ## Overview
 
-LADIES (Layer-Dependent Importance Sampling for Training Deep and Large Graph Convolutional Networks) is a novel sampling algorithm for training GNN. It considers the previously sampled nodes for calculating layer-dependent sampling probability.
+ScalarGNNs introduces a few novel models based off the Graph Convolutional Network (GCN), Simple Graph Convolution (SGC), and Graph Attention Network (GAT) architectures.
 
-Based on the sampled nodes in the upper layer, LADIES selects their neighborhood nodes, compute the importance probability accordingly and samples a fixed number of nodes within them. We prove theoretically and experimentally, that our proposed sampling algorithm outperforms the previous sampling methods regarding time, memory and accuracy.
-
-You can see our NeurIPS 2019 paper [“**Layer-Dependent Importance Sampling for Training Deep and Large Graph Convolutional Networks**”](https://arxiv.org/abs/1911.07323) for more details.
+Main Models:
+- ScalarGCN
+- ScalarSGC
+- ScalarSAFGATv2
 
 ## Setup
-This implementation is based on Pytorch We assume that you're using Python 3 with pip installed. To run the code, you need the following dependencies:
+This implementation is based on Pytorch. We assume that you're using Python 3 with pip installed. To run the code, you need the following dependencies:
 
-- [Pytorch 1.0](https://pytorch.org/)
-- [gensim](https://github.com/RaRe-Technologies/gensim)
-- [networkx](https://networkx.github.io/)
-- [tqdm](https://github.com/tqdm/tqdm)
+- [Pytorch 2.1](https://pytorch.org/)
+- [Pytorch Geometric 2.6.0](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html)
 - [numpy](https://numpy.org/)
+- [scipy](https://scipy.org/)
+- [scikit-learn](https://scikit-learn.org/stable/)
 
+We utilise pytorch geometric to load data. However. you can upload any graph datasets as you want, and change the load_data function in /utils.py.
 
-We upload the three small benchmark node classification datasets, cora, pubmed and citeseer in /data for usage. You can upload any graph datasets as you want, and change the data loader function in /utils.py
+## Files
+- main.py: The main script used for executing experiments
+- samplers.py: Sampling methods (full-restricted, GraphSAGE, FastGCN, LADIES)
+- models.py: The GNN models
+- utils.py: Utility functions
+- plot_loss.py: An example file that can be used to visualise the per_run data generated with the log_runs flag set to True.
 
-## Usage
-Execute the following scripts to train and evaluate the model:
+## Experiment Hyperaparameters
+The experiment hyperparameters should all be pretty self-explanatory and more information abuout them can be shown by running 
 
 ```bash
-python3 pytorch_ladies.py --cuda 0 --dataset cora  # Train GCN with LADIES on cora.
+python3 main.py --h # Displays information about hyperaparameters
 ```
-There's also other hyperparameters to be tuned, which can be found in 'pytorch_ladies.py' for details.
 
-The main function is ``ladies_sampler()``, which sample a fixed number of nodes per layer. The sampling probability (importance) is computed adaptively according to the nodes sampled in the upper layer. We currently implement it using numpy sparse matrix multiplication. One can also implement it via pytorch multiplication or dictionary operation later. 
+The argparse.BooleanOptionalAction hyperparameters are by default set to false.
 
-### Citation
+Some hyperparameters that require further explanation:
+- log_memory_snapshot: This generates a memory snapshot entitled "mem_log.pickle" in the main folder. This snapshot can then be uploaded to the [Pytorch Snapshot Visualisation Tool](https://pytorch.org/memory_viz) to visualise how memory is allocated across the run.
+- log_runs: This logs information to a different file for each run in results/per_epoch. The file is named with the main hyperparameters for the run, as well as the run number. The epoch number, train loss, validation loss, and validation f1 are logged in each line of the file.
+- log_final: This writes all the final information from a set of runs to the file "results/final.csv". The comma separated values represent in the follow order: "pretrain_mem, pretrain_time, total_time, model_size, total_params, train_params, train_time, valid_time, epochs, best_epoch, train_time_per_epoch, train_memory, val_memory, adjs_memory, val_acc, val_f1, val_sens, val_spec, test_acc, test_f1, test_sens, test_spec".
 
-Please consider citing the following paper when using our code for your application.
+## Usage
+Example of command line usage:
 
+```bash
+python3 main.py --dataset cora --model scalarGCN --sampler LADIES  # Train ScalarGCN with LADIES on cora.
 ```
-@inproceedings{ladies2019,
-  title={Layer-Dependent Importance Sampling for Training Deep and Large Graph Convolutional Networks},
-  author={Difan Zou and Ziniu Hu and Yewen Wang and Song Jiang and Yizhou Sun and Quanquan Gu},
-  booktitle={Advances in Neural Information Processing Systems 32: Annual Conference on Neural Information Processing Systems, NeurIPS},
-  year={2019}
-}
-```
+
+Modify the hyperparameters as required.

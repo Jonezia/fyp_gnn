@@ -371,7 +371,7 @@ class ParallelGAT(nn.Module):
         self.layers = layers
         self.nout = nout
         self.head_streams = nn.ModuleList()
-        self.linear = nn.Linear(nhid * nheads, nout)
+        # self.linear = nn.Linear(nhid * nheads, nout)
     
         for _ in range(nheads):
             if zero_attention:
@@ -389,14 +389,25 @@ class ParallelGAT(nn.Module):
                 self.head_streams.append(GraphAttentionStream(nfeat, nhid, nout, layers, dropout, alpha,
                     scalar=scalar, orig_features=orig_features, nn_layers=nn_layers, fnn_layers=fnn_layers))
 
+    # def forward(self, feat_data, adjs, sampled = None):
+    #     n = feat_data.shape[0]
+    #     concat = torch.tensor([]).to(torch.device("cuda:0"))
+    #     for head_stream in self.head_streams:
+    #         out = head_stream.forward(feat_data, adjs, sampled)
+    #         concat = torch.cat((concat, out), dim=1)
+    #     concat = self.dropout(concat)
+    #     return self.linear(concat)
     def forward(self, feat_data, adjs, sampled = None):
         n = feat_data.shape[0]
-        concat = torch.tensor([]).to(torch.device("cuda:0"))
+        # with sampling the output is of shape (len(batch_nodes), nout)
+        if sampled is not None:
+            out = torch.zeros(len(sampled[-1]), self.nout).to(torch.device("cuda:0"))
+        # otherwise the output is of shape (n, nout)
+        else:
+            out = torch.zeros(n, self.nout).to(torch.device("cuda:0"))
         for head_stream in self.head_streams:
-            out = head_stream.forward(feat_data, adjs, sampled)
-            concat = torch.cat((concat, out), dim=1)
-        concat = self.dropout(concat)
-        return self.linear(concat)
+            out += head_stream.forward(feat_data, adjs, sampled)
+        return out
 
 # used in: ParallelGAT, ScalarGAT, ParallelFGAT, ScalarFGAT
 class GraphAttentionStream(nn.Module):
@@ -414,6 +425,8 @@ class GraphAttentionStream(nn.Module):
         for i in range(layers-1):
             self.head_gcs.append(GraphAttentionHead(nhid, nhid, dropout=dropout, alpha=alpha, scalar=scalar,
                 orig_features=orig_features, fnn_layers=fnn_layers))
+        # Output tranformation
+        self.linear = nn.Linear(nhid, nout)
 
     def forward(self, feat_data, adjs, sampled = None):
         # ParallelFGAT / ScalarFGAT
@@ -436,7 +449,7 @@ class GraphAttentionStream(nn.Module):
                 x = feat_data
                 for idx in range(len(self.head_gcs)):
                     x = self.dropout(self.head_gcs[idx](x, adjs))
-        return x
+        return self.linear(x)
 
 # used in: ParallelSAFGAT, ScalarSAFGAT
 class GraphSingleAttentionStream(nn.Module):
@@ -457,6 +470,8 @@ class GraphSingleAttentionStream(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar))
+        # Output tranformation
+        self.linear = nn.Linear(nhid, nout)
 
         self.fW = generate_tiered_model(nfeat, nhid, nn_layers=fnn_layers)
         self.a_src = nn.Parameter(torch.FloatTensor(nhid, 1))
@@ -490,7 +505,7 @@ class GraphSingleAttentionStream(nn.Module):
             attention = feature_attention(adjs, self.fW, self.a_src, self.a_dest, feat_data, None, self.dropout_raw, self.leakyrelu)
             for idx in range(len(self.head_gcs)):
                 x = self.dropout(self.head_gcs[idx](x, attention))
-        return x
+        return self.linear(x)
     
 # model uses the single feature transformation of scalarisation as the feature transformation for the single attention
 # i.e. instead of multipling feat_data by fW to get embeddings for the attention function, we simply
@@ -514,6 +529,8 @@ class ScalarSAFGATv2Stream(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=True))
+        # Output tranformation
+        self.linear = nn.Linear(nhid, nout)
 
         self.a_src = nn.Parameter(torch.FloatTensor(nhid, 1))
         self.a_dest = nn.Parameter(torch.FloatTensor(nhid, 1))
@@ -546,7 +563,7 @@ class ScalarSAFGATv2Stream(nn.Module):
             attention = feature_attention(adjs, None, self.a_src, self.a_dest, x, None, self.dropout_raw, self.leakyrelu)
             for idx in range(len(self.head_gcs)):
                 x = self.dropout(self.head_gcs[idx](x, attention))
-        return x
+        return self.linear(x)
     
 # used in: ParallelZAGAT, ScalarZAGAT
 class GraphZeroAttentionStream(nn.Module):
@@ -561,6 +578,8 @@ class GraphZeroAttentionStream(nn.Module):
         # Hidden layers
         for i in range(layers-1):
             self.head_gcs.append(GraphConvolution(nhid, nhid, scalar=scalar))
+        # Output tranformation
+        self.linear = nn.Linear(nhid, nout)
 
     def forward(self, feat_data, adjs, sampled = None):
         # sampling
@@ -572,4 +591,4 @@ class GraphZeroAttentionStream(nn.Module):
             x = feat_data
             for idx in range(len(self.head_gcs)):
                 x = self.dropout(self.head_gcs[idx](x, adjs))
-        return x
+        return self.linear(x)
